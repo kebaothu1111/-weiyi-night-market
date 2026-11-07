@@ -563,8 +563,12 @@ function startWarm(){ const c = N.c; c.warm = c.wmax = warmTime(c.m); c.pos = 0;
 /* Each cookware has its own minigame. Result q (0..1) → heat score 30 / 15 / 0. */
 const ARW = ['←','↑','→','↓'], ARK = { ArrowLeft:0, ArrowUp:1, ArrowRight:2, ArrowDown:3 };
 const avg = a => a.reduce((x, y) => x + y, 0) / a.length;
+// Minigames come from a shuffled bag of all 6, so each appears equally often and none repeats until all have been played.
+// The cookware art and tool level still follow the dish's own tool.
+let GAME_BAG = [];
+function nextGame(){ if (!GAME_BAG.length) GAME_BAG = shuffle(Object.values(METHODS).map(m => m.game)); return GAME_BAG.pop(); }
 function startHeat(){
-  const c = N.c, lv = S.tools[c.m], g = METHODS[c.m].game;
+  const c = N.c, lv = S.tools[c.m], g = nextGame(); c.gm = Object.keys(METHODS).find(k => METHODS[k].game === g);
   Object.assign(c, { game: g, pos: 0, dir: 1, prog: 0, hold: false, hits: [], burnt: false, q: 0,
     zw: zoneW(c.m), speed: ptrSpeed(c.m, DISHES[c.i].zone), hmax: 7 + (lv - 1) * .8 });
   c.zc = 10 + c.zw / 2 + Math.random() * (80 - c.zw); c.pass = 0; c.maxPass = lv >= 4 ? 4 : 3;
@@ -788,7 +792,7 @@ function cookPanel(){
   } else if (n.phase === 'heat') {
     const g = c.game, zone = '<div class="zy" id="zy"></div><div class="zg" id="zg"></div>', h = 26 + lv * 9;
     const bar = inner => `<div class="heat" style="height:${h}px">${inner}<div class="ptr" id="ptr"></div></div>`;
-    const btn = (act = 'stop') => `<button class="btn primary big" data-act="${act}" style="font-size:22px;touch-action:none">${esc(L(METHODS[c.m].stop))}</button>`;
+    const btn = (act = 'stop') => `<button class="btn primary big" data-act="${act}" style="font-size:22px;touch-action:none">${esc(L(METHODS[c.gm].stop))}</button>`;
     const game = {
       mash: `<div class="heat" style="height:${h}px"><div class="hfill" id="hprog"></div></div>${btn()}`,
       sweep: bar(zone + '<div class="burn"></div>') + btn(),
@@ -797,7 +801,7 @@ function cookPanel(){
       arrows: `<div class="arrows" id="arrows">${arrowsHTML()}</div><div class="row arrowpad">${ARW.map((a, k) => `<button class="btn big" data-act="arrow" data-k="${k}">${a}</button>`).join('')}</div>`,
       rhythm: `<div class="heat rhythm" style="height:${h + 8}px"><div class="hitline"></div>${(c.notes || []).map((x, k) => `<div class="note" id="note${k}">♨</div>`).join('')}</div>${btn()}`
     }[g];
-    side = `<div class="row"><b>${esc(L(METHODS[c.m].verb))}</b><span class="muted num" style="margin-left:auto;font-size:18px" id="htime"></span></div>
+    side = `<div class="row"><b>${esc(L(METHODS[c.gm].verb))}</b><span class="muted num" style="margin-left:auto;font-size:18px" id="htime"></span></div>
       <p class="muted" style="font-size:12px">${t('hw_' + g)}</p>${game}<div id="hflash" class="hflash"></div>
       <p class="muted" style="font-size:11px;text-align:center">${g === 'arrows' ? '← ↑ → ↓' : g === 'hold' ? t('holdKey') : 'Space / Enter'}</p>`;
   } else {

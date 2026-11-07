@@ -14,7 +14,7 @@ Game web của 阮庭陽 (đồ án giữa kỳ môn 生成式AI應用). Chủ r
 - 15 món là con số cố định: `S.frags` dài 15, 15 lồng đèn, `valid()` kiểm `length===15`. Thêm/bớt món phải sửa mấy chỗ đó và đổi `SAVE_KEY`/`v`.
 - Save hiện tại `v:2` (`weiyi-night-market-v2`); `migrate()` chuyển save v1 cũ. Đổi cấu trúc `S` → sửa `newState()` + `valid()`, không tương thích thì tăng phiên bản.
 - Công thức điểm (khớp slide báo cáo): nguyên liệu `50*đúng/(4+sai)`, lửa 30/15/0 (minigame trả q 0..1: q≥0.8 → 30, ≥0.45 → 15), tốc độ `20*kiên nhẫn còn lại`, thiếu muối/đường −15. ≥80 hoàn hảo (khách có câu chuyện cho mảnh ký ức), 50–79 thường, <50 thất bại. Rank = điểm + thưởng đồ nghề `(cấp-1)*5`: UR≥115, SSR≥100, SR≥85, còn lại R. Đổi luật thì nhắc chủ repo cập nhật slide.
-- Minigame: kim chạy qua lại nhiều lượt; bấm trượt gọi `miss()` trừ kiên nhẫn khách. Chảo rán cháy sau 3 lượt (4 lượt khi đồ nghề cấp ≥4).
+- Minigame rút từ túi xáo trộn 6 loại (`nextGame()`), mỗi loại xuất hiện đều nhau; hình cận cảnh và cấp đồ nghề vẫn theo dụng cụ của món (`c.m`), chữ nút theo minigame (`c.gm`). Kim chạy qua lại nhiều lượt; bấm trượt gọi `miss()` trừ kiên nhẫn khách. Chảo rán cháy sau 3 lượt (4 lượt khi đồ nghề cấp ≥4).
 - Hóa đơn mỗi Chủ nhật (thuê + điện + viện phí 600 đến khi xem kết + nợ ngân hàng). `S.loans` thêm sau, `patch()` bù cho save v2 cũ. Không đủ tiền → game over, xóa save.
 - Chữ mới phải có cả hai ngôn ngữ. Bản public không ghi MSSV, chỉ ghi tên 阮庭陽.
 - Chỉ sửa đúng phần được nhờ; không viết lại cả file.
