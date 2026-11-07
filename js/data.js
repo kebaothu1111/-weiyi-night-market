@@ -295,3 +295,49 @@ const EV_OUT = {
   candle:['燭光下的夜市別有一番風味，客人反而更多了。','Chợ đêm dưới ánh nến lại có nét riêng, khách còn đông hơn.'],
   closeup:['你收起攤子，早點回家休息。','Bạn dọn quán, về nghỉ sớm.']
 };
+
+/* ---------- casino, loans, special requests, recipe board ---------- */
+Object.assign(SHOPS, {
+  casino: { name:['港都娛樂城','Sòng bạc Cảng Đô'], desc:['骰寶、拉霸、比大小。小賭怡情！','Tài xỉu, máy xèng, lật bài. Chơi vui thôi nhé!'] },
+  bank:   { name:['銀行・地下錢莊','Ngân hàng・Cho vay'], desc:['正規貸款，或是巷子裡的高利貸。','Vay ngân hàng, hoặc vay nặng lãi trong hẻm.'] }
+});
+STATS.memory.desc = ['按錯時客人比較不會不耐煩；滿足特別要求拿更多小費。','Bấm trượt ít bị trừ kiên nhẫn hơn; làm đúng yêu cầu riêng được tip nhiều hơn.'];
+// Customer special requests: an extra ingredient added as a 5th step
+const EXTRAS = [
+  ['雞蛋', ['加一顆蛋','thêm một quả trứng']], ['九層塔', ['多加九層塔','thêm húng quế']], ['香料泥', ['我要辣一點','cho cay hơn chút']],
+  ['蒜頭', ['多放蒜頭','thêm tỏi']], ['紅蔥頭', ['多加紅蔥頭','thêm hành tím']], ['薑絲', ['多加薑絲','thêm gừng']], ['香茅', ['加點香茅','thêm chút sả']]
+];
+const LOAN = {
+  bank:  { rate:.15, opts:[500, 1000, 2000] },          // flat 15%, repaid with the Sunday bill
+  shark: { rate:.2, opts:[500, 1000, 3000], days:7 }    // +20% every night, collectors after 7 days
+};
+EVENTS.shark = { who:'gang', text:['「虎哥的錢你也敢拖？連本帶利 ${0}，今天就要！」','"Dám khất tiền của anh Hổ à? Cả gốc lẫn lãi ${0}, hôm nay phải trả!"'],
+  choices:[ ['sharkpay',['全部還清（${0}）','Trả hết (${0})']], ['sharkhalf',['先還一半','Trả trước một nửa']], ['sharkrun',['躲到後面不出來','Trốn ra sau bếp']] ] };
+Object.assign(EV_OUT, {
+  sharkpay:['債還清了，你終於鬆了一口氣。','Trả hết nợ rồi, bạn thở phào nhẹ nhõm.'],
+  sharkhalf:['他們收了一半：「剩下的，明天再來拿。」','Chúng lấy một nửa: "Phần còn lại, mai tao quay lại lấy."'],
+  sharkrunOk:['他們找不到你，罵了幾句就走了。','Chúng không tìm thấy bạn, chửi mấy câu rồi bỏ đi.'],
+  sharkrunBad:['他們翻桌砸攤，客人都嚇跑了，你也受了傷。','Chúng lật bàn đập quán, khách sợ chạy hết, bạn cũng bị thương.']
+});
+Object.assign(STR, {
+  wantDish:['「我想吃一份{0}。」','"Cho tôi một phần {0}."'], extraReq:['特別要求：{0}','Yêu cầu riêng: {0}'],
+  needIng:['需要：','Cần:'], skipExtra:['做不到這個要求，直接下鍋','Không làm được yêu cầu, nấu luôn'],
+  extraOk:['特別要求達成！小費 +${0}','Làm đúng yêu cầu! Tip +${0}'], extraMiss:['客人有點失望：沒照他的要求做。','Khách hơi thất vọng: không làm theo yêu cầu.'],
+  passes:['還能來回 {0} 趟','Còn {0} lượt chạy'], missPen:['按錯了！客人更不耐煩','Trượt rồi! Khách sốt ruột hơn'],
+  recipes:['食譜','Công thức'], recipeT:['食譜與食材表','Bảng công thức & nguyên liệu'],
+  recipeHint:['每道菜要 4 樣食材＋鹽（甜口再加糖），依順序下鍋。點亮色的食材可以直接加入購物車。','Mỗi món cần 4 nguyên liệu + muối (món ngọt thêm đường), cho vào theo thứ tự. Bấm nguyên liệu sáng màu để thêm vào giỏ.'],
+  shopList:['這家店的商品','Hàng của tiệm này'], season:['調味','Gia vị'],
+  debt:['欠債','Nợ'],
+  casT:['港都娛樂城','Sòng bạc Cảng Đô'], casWarn:['賭博有輸有贏，別把帳單錢輸光了！','Cờ bạc có thắng có thua, đừng nướng hết tiền trả hóa đơn!'],
+  bet:['下注','Cược'], dice:['骰寶大小','Tài xỉu'], slots:['拉霸機','Máy xèng'], cards:['比大小','Lật bài lớn nhỏ'],
+  big:['大（11–17）','Tài (11–17)'], small:['小（4–10）','Xỉu (4–10)'], triple:['豹子！莊家通殺','Ba con giống nhau! Nhà cái ăn hết'],
+  spin:['拉！','Quay!'], higher:['下一張比較大','Lá sau lớn hơn'], lower:['下一張比較小','Lá sau nhỏ hơn'],
+  win:['贏了 +${0}','Thắng +${0}'], lose:['輸了 -${0}','Thua -${0}'], push:['平手，退回賭注','Hòa, hoàn tiền cược'],
+  payTable:['三個 7️⃣ ×30・三個 💰 ×15・三個 🏮 ×8・其他三個一樣 ×4・兩個一樣 ×1.5','Ba 7️⃣ ×30・ba 💰 ×15・ba 🏮 ×8・ba hình giống nhau ×4・hai hình giống ×1.5'],
+  cardRule:['猜下一張比現在大還是小，猜對拿回 1.9 倍；一樣大算輸。','Đoán lá sau lớn hay nhỏ hơn, đúng được 1.9 lần tiền cược; bằng nhau tính thua.'],
+  bankTab:['銀行','Ngân hàng'], sharkTab:['地下錢莊（虎哥）','Cho vay nặng lãi (anh Hổ)'],
+  bankInfo:['利息 15%，連本帶利在週日帳單一起扣。同時只能借一筆。口碑 3 以上才能借 $2000。','Lãi 15%, gốc + lãi trừ luôn vào hóa đơn Chủ nhật. Chỉ vay một khoản một lúc. Uy tín từ 3 mới được vay $2000.'],
+  sharkInfo:['不用審核，馬上拿錢。每過一晚利息 +20%；超過 7 天沒還，討債的會天天上門。','Không cần xét duyệt, lấy tiền ngay. Mỗi đêm lãi +20%; quá 7 ngày chưa trả, người đòi nợ sẽ đến mỗi tối.'],
+  borrow:['借 ${0}','Vay ${0}'], owe:['目前欠 ${0}','Đang nợ ${0}'], repayAll:['全部還清 ${0}','Trả hết ${0}'], repay500:['還 $500','Trả $500'],
+  bankLoanBill:['銀行貸款','Nợ ngân hàng'], borrowed:['借到 ${0}','Đã vay ${0}'], repaid:['還款完成','Đã trả nợ'], daysLeft:['已借 {0} 天','Đã vay {0} ngày'], noDebt:['目前沒有欠款','Hiện không nợ']
+});

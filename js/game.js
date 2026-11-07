@@ -18,7 +18,7 @@ let muted = false, view = 'title', redraw = null, T = 0, pendingBill = false;
 function newState(){
   return { v:2, day:1, zone:0, zoneNights:0, lv:1, exp:0, points:0, stats:{ knife:1, heat:1, memory:1, charm:1 },
     stamina:100, money:800, rep:2, frags:Array(15).fill(0), inv:{}, tools:{ wok:1, pan:1, pot:1, grill:1, fryer:1, steamer:1 },
-    shop:1, gear:{ fridge:0, sign:0, fan:0 }, ended:false, served:0, visited:0 };
+    shop:1, gear:{ fridge:0, sign:0, fan:0 }, ended:false, served:0, visited:0, loans:[] };
 }
 function valid(o){
   try {
@@ -29,7 +29,8 @@ function valid(o){
       Array.isArray(o.frags) && o.frags.length === 15 && o.frags.every(f => Number.isFinite(f) && f >= 0 && f <= 3) &&
       o.inv && typeof o.inv === 'object' && Object.entries(o.inv).every(([k, a]) => ING[k] && Array.isArray(a) && a.every(Number.isFinite)) &&
       o.tools && TOOLS.every(k => Number.isFinite(o.tools[k]) && o.tools[k] >= 1 && o.tools[k] <= 5) &&
-      o.gear && Object.keys(GEAR).every(k => Number.isFinite(o.gear[k]) && o.gear[k] >= 0 && o.gear[k] <= GEAR[k].max);
+      o.gear && Object.keys(GEAR).every(k => Number.isFinite(o.gear[k]) && o.gear[k] >= 0 && o.gear[k] <= GEAR[k].max) &&
+      Array.isArray(o.loans) && o.loans.every(l => (l.t === 'bank' || l.t === 'shark') && Number.isFinite(l.owed) && Number.isFinite(l.day));
   } catch (e) { return false; }
 }
 // Old v1 saves (single-file version): keep progress, start fresh on the new systems.
@@ -41,11 +42,12 @@ function migrate(o){
   s.money = Math.max(s.money, 800); starterStock(s);
   return valid(s) ? s : null;
 }
+function patch(o){ if (o && o.v === 2 && !Array.isArray(o.loans)) o.loans = []; return o; } // older v2 saves had no loans
 function save(){ try { localStorage.setItem(SAVE_KEY, JSON.stringify(S)); } catch (e) {} }
 function loadSave(){
   try {
     const r = localStorage.getItem(SAVE_KEY);
-    if (r) { const o = JSON.parse(r); return valid(o) ? o : null; }
+    if (r) { const o = patch(JSON.parse(r)); return valid(o) ? o : null; }
     const old = localStorage.getItem(OLD_KEY); return old ? migrate(JSON.parse(old)) : null;
   } catch (e) { return null; }
 }
@@ -71,8 +73,11 @@ const stars = r => '★'.repeat(Math.floor(r)) + '☆'.repeat(5 - Math.floor(r))
 const weekday = () => (S.day - 1) % 7;
 const bills = () => ({ rent: SHOP_LV[S.shop - 1].rent,
   power: 80 + 20 * (TOOLS.reduce((n, k) => n + S.tools[k], 0) - 6) + 40 * (S.shop - 1) + 50 * S.gear.sign + 30 * S.gear.fridge + 20 * S.gear.fan,
-  hosp: S.ended ? 0 : 600 });
-const billTotal = () => { const b = bills(); return b.rent + b.power + b.hosp; };
+  hosp: S.ended ? 0 : 600, bank: S.loans.filter(l => l.t === 'bank').reduce((n, l) => n + l.owed, 0) });
+const billTotal = () => { const b = bills(); return b.rent + b.power + b.hosp + b.bank; };
+const debtOf = t => S.loans.filter(l => !t || l.t === t).reduce((n, l) => n + l.owed, 0);
+const sharkLate = () => S.loans.some(l => l.t === 'shark' && S.day - l.day >= LOAN.shark.days);
+function payDebt(t, amt){ for (const l of S.loans) if (l.t === t && amt > 0) { const x = Math.min(amt, l.owed); l.owed -= x; amt -= x; S.money -= x; } S.loans = S.loans.filter(l => l.owed > 0); }
 const rankOf = q => RANKS.find(r => q >= r.min);
 const dName = i => L(DISHES[i].name);
 
@@ -87,13 +92,13 @@ function starterStock(s){
   addInv('鹽', 10, s); addInv('糖', 5, s);
 }
 function shopItems(shop){
-  const used = new Set(); unlocked().forEach(i => DISHES[i].steps.forEach(k => used.add(k)));
+  const used = new Set(EXTRAS.map(e => e[0])); unlocked().forEach(i => DISHES[i].steps.forEach(k => used.add(k)));
   return Object.keys(ING).filter(k => ING[k].s === shop && (used.has(k) || ING[k].seas));
 }
 function targetUnits(k){
   if (k === '鹽') return 10;
   if (k === '糖') return unlocked().some(i => DISHES[i].sweet) ? 5 : 0;
-  return 2 * unlocked().filter(i => DISHES[i].steps.includes(k)).length;
+  return Math.max(EXTRAS.some(e => e[0] === k) ? 2 : 0, 2 * unlocked().filter(i => DISHES[i].steps.includes(k)).length);
 }
 
 /* ---------- audio (Web Audio API, synthesized) ---------- */
@@ -170,6 +175,7 @@ function renderHud(){
     <div class="hchip"><span class="k">${t('rep')} ${S.rep.toFixed(1)}</span><span class="v" style="font-size:12px;color:var(--lantern);letter-spacing:-1px">${stars(S.rep)}</span></div>
     <div class="hchip"><span class="k">${t('stamina')} ${Math.round(S.stamina)}/${sm}</span><div class="meter"><i style="width:${S.stamina / sm * 100}%"></i></div></div>
     <div class="hchip"><span class="k">Lv ${S.lv}${S.points ? ` <b style="color:var(--lantern)">+${S.points}</b>` : ''}</span><div class="meter"><i style="width:${clamp(S.exp / need * 100, 0, 100)}%;background:var(--lantern)"></i></div></div>
+    ${S.loans.length ? `<div class="hchip"><span class="k">${t('debt')}</span><span class="v num" style="color:var(--red)">$${debtOf()}</span></div>` : ''}
     <div class="hspace"></div>
     <div class="hbill">${wd === 6 ? `<b>${esc(bill)}</b>` : esc(bill)}</div>
     <button class="hbtn" data-act="lang">${LANG ? '中文' : 'VI'}</button>
@@ -181,6 +187,7 @@ function renderDock(){
   if (view === 'day') h = `
     <button class="btn" data-act="map"><span class="i">🗺️</span>${t('map')}</button>
     <button class="btn" data-act="stats"><span class="i">📜</span>${t('stats')}${S.points ? `<span class="badge">${S.points}</span>` : ''}</button>
+    <button class="btn" data-act="recipes"><span class="i">📖</span>${t('recipes')}</button>
     <button class="btn" data-act="album"><span class="i">🏮</span>${t('album')}</button>
     <button class="btn" data-act="saves"><span class="i">💾</span>${t('saves')}</button>
     <button class="btn primary big" data-act="open"><span class="i">🍜</span>${t('open')}</button>`;
@@ -260,11 +267,20 @@ function showShop(k){
   }).join('');
   openModal(`<div class="shead"><h2>${esc(L(SHOPS[k].name))}</h2><span class="num" style="font-size:24px;color:var(--gold)">$${S.money}</span><button class="btn small ghost" data-act="close">${t('close')}</button></div>
     <p class="muted" style="font-size:13px">${esc(L(SHOPS[k].desc))}</p>
-    <div class="grid2">${rows}</div>
+    ${recipeBoard(k)}
+    <h3 style="font-size:16px">${t('shopList')}</h3><div class="grid2">${rows}</div>
     <div class="row" style="justify-content:flex-end"><button class="btn" data-act="cartfill">${t('fill')}</button>
       <button class="btn primary" data-act="buy" ${total === 0 || total > S.money ? 'disabled' : ''}>${t('shopBuy', total)}</button></div>
     ${total > S.money ? `<p class="bad">${t('notEnough')}</p>` : ''}`);
 }
+function recipeBoard(shop){
+  const chip = k => { const g = ING[k], here = g.s === shop, q = cart[k] || 0;
+    return `<${here ? `button data-act="cart" data-k="${esc(k)}" data-d="1"` : 'span'} class="chip ${here ? 'here' : ''} ${have(k) ? '' : 'none'}">${g.e} ${esc(ingName(k))} <b>${have(k)}</b>${q ? `<i>+${q * g.n}</i>` : ''}<small>${esc(L(SHOPS[g.s].name))}</small></${here ? 'button' : 'span'}>`; };
+  return `<div class="recipes"><p class="eyebrow">📖 ${t('recipeT')}</p><p class="muted" style="font-size:11px">${t('recipeHint')}</p>
+    ${unlocked().map(i => { const d = DISHES[i]; return `<div class="rrow"><div class="rname">${d.emoji} <b>${esc(dName(i))}</b><small>${METHODS[d.m].icon} ${esc(L(METHODS[d.m].name))}・${t('stockN', servings(i))}</small></div>
+      <div class="rchips">${d.steps.map((k, j) => `<span class="rno">${j + 1}</span>${chip(k)}`).join('')}<span class="rno">+</span>${chip('鹽')}${d.sweet ? chip('糖') : ''}</div></div>`; }).join('')}</div>`;
+}
+function showRecipes(){ cart = {}; openModal(`<div class="shead"><h2>${t('recipeT')}</h2><button class="btn small ghost" data-act="close">${t('close')}</button></div>${recipeBoard('')}`); }
 let wsTab = 'tools';
 function showWorkshop(){
   const tierChip = lv => `<span class="tierchip" style="background:${TOOL_TIERS[lv - 1].l}">${esc(L(TOOL_TIERS[lv - 1].name))}</span>`;
@@ -296,6 +312,71 @@ function showHospital(){
     <div class="score"><span>${t('rent')}</span><span class="num">$${b.rent}</span><span>${t('power')}</span><span class="num">$${b.power}</span><span>${t('hospital')}</span><span class="num">$${b.hosp}</span></div>
     <div class="total"><span>${t('billT')}</span><span class="num">$${billTotal()}</span></div>
     <button class="btn primary" data-act="visit" ${S.visited === S.day ? 'disabled' : ''}>${S.visited === S.day ? t('visited') : t('visit')}</button>`);
+  paintPortraits($('#sheet'));
+}
+
+/* ---------- casino ---------- */
+let casTab = 'dice', casBet = 100;
+const CAS = { busy: false, dice: [1, 1, 1], reels: ['🏮', '💰', '7️⃣'], card: 1 + rnd(13), msg: '', ok: 0 };
+const SLOT_SYM = ['🍜', '🥟', '🍢', '🥭', '🏮', '💰', '7️⃣'], CARD_N = ['', 'A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'];
+const PIPS = { 1:[4], 2:[0,8], 3:[0,4,8], 4:[0,2,6,8], 5:[0,2,4,6,8], 6:[0,2,3,5,6,8] };
+const dieHTML = n => `<div class="die">${Array.from({ length: 9 }, (_, k) => `<i class="${PIPS[n].includes(k) ? 'on' : ''}"></i>`).join('')}</div>`;
+function showCasino(){
+  const can = !CAS.busy && S.money >= casBet;
+  let game = '';
+  if (casTab === 'dice') game = `<div class="row" style="justify-content:center;gap:14px" id="casview">${CAS.dice.map(dieHTML).join('')}</div>
+    <div class="row"><button class="btn primary big" style="flex:1" data-act="casdice" data-k="big" ${can ? '' : 'disabled'}>${t('big')}</button><button class="btn jade big" style="flex:1" data-act="casdice" data-k="small" ${can ? '' : 'disabled'}>${t('small')}</button></div>`;
+  else if (casTab === 'slots') game = `<div class="reels" id="casview">${CAS.reels.map(x => `<span>${x}</span>`).join('')}</div><p class="muted" style="font-size:11px;text-align:center">${t('payTable')}</p>
+    <button class="btn primary big" data-act="casslot" ${can ? '' : 'disabled'}>🎰 ${t('spin')}</button>`;
+  else game = `<div class="row" style="justify-content:center;gap:14px" id="casview"><div class="pcard">${CARD_N[CAS.card]}</div><div class="pcard back">?</div></div><p class="muted" style="font-size:11px;text-align:center">${t('cardRule')}</p>
+    <div class="row"><button class="btn primary big" style="flex:1" data-act="cascard" data-k="hi" ${can ? '' : 'disabled'}>▲ ${t('higher')}</button><button class="btn jade big" style="flex:1" data-act="cascard" data-k="lo" ${can ? '' : 'disabled'}>▼ ${t('lower')}</button></div>`;
+  openModal(`<div class="shead"><h2>🎲 ${t('casT')}</h2><span class="num" style="font-size:24px;color:var(--gold)">$${S.money}</span><button class="btn small ghost" data-act="close">${t('close')}</button></div>
+    <p class="warn" style="font-size:12px">${t('casWarn')}</p>
+    <div class="tabs">${['dice','slots','cards'].map(k => `<button class="btn small ${casTab === k ? 'on' : ''}" data-act="castab" data-k="${k}">${t(k)}</button>`).join('')}</div>
+    <div class="row"><span class="muted">${t('bet')}</span>${[50, 100, 500, 1000].map(v => `<button class="btn small ${casBet === v ? 'on primary' : ''}" data-act="casbet" data-k="${v}">$${v}</button>`).join('')}</div>
+    <div class="casino frame">${game}<p class="casmsg ${CAS.ok > 0 ? 'good' : CAS.ok < 0 ? 'bad' : 'muted'}" id="casmsg">${esc(CAS.msg)}</p></div>`);
+}
+function casSettle(net, msg){ S.money += net; CAS.ok = Math.sign(net); CAS.msg = msg || (net > 0 ? t('win', net) : net < 0 ? t('lose', -net) : t('push')); CAS.busy = false;
+  net > 0 ? (sfx.coin(), sfx.perfect()) : net < 0 ? sfx.bad() : sfx.tap(); save(); renderHud(); showCasino(); }
+function casAnimate(ms, frame, done){ CAS.busy = true; CAS.msg = ''; CAS.ok = 0; showCasino(); const t0 = performance.now();
+  const iv = setInterval(() => { const v = $('#casview'); if (v) frame(v); sfx.tap(); if (performance.now() - t0 > ms) { clearInterval(iv); done(); } }, 90); }
+function casDice(k){
+  const bet = casBet; if (CAS.busy || S.money < bet) return;
+  casAnimate(1000, v => v.innerHTML = [1, 2, 3].map(() => dieHTML(1 + rnd(6))).join(''), () => {
+    CAS.dice = [1 + rnd(6), 1 + rnd(6), 1 + rnd(6)]; const sum = CAS.dice.reduce((a, b) => a + b, 0), tri = CAS.dice[0] === CAS.dice[1] && CAS.dice[1] === CAS.dice[2];
+    if (tri) return casSettle(-bet, t('triple'));
+    casSettle((k === 'big') === (sum >= 11) ? bet : -bet, null);
+  });
+}
+function casSlot(){
+  const bet = casBet; if (CAS.busy || S.money < bet) return;
+  const fin = [pick(SLOT_SYM), pick(SLOT_SYM), pick(SLOT_SYM)];
+  casAnimate(1300, v => { const el = v.querySelectorAll('span'); const el2 = performance.now(); el.forEach((x, j) => { if (!x.dataset.stop) x.textContent = pick(SLOT_SYM); }); }, () => {
+    CAS.reels = fin; const [a, b, c] = fin;
+    const mult = a === b && b === c ? ({ '7️⃣': 30, '💰': 15, '🏮': 8 }[a] || 4) : (a === b || b === c || a === c) ? 1.5 : 0;
+    casSettle(Math.round(bet * mult) - bet, null);
+  });
+}
+function casCard(k){
+  const bet = casBet; if (CAS.busy || S.money < bet) return;
+  const cur = CAS.card, nx = 1 + rnd(13);
+  casAnimate(700, v => { const b = v.querySelector('.back'); if (b) b.textContent = CARD_N[1 + rnd(13)]; }, () => {
+    CAS.card = nx; const ok = k === 'hi' ? nx > cur : nx < cur;
+    casSettle(ok ? Math.round(bet * .9) : -bet, `${CARD_N[cur]} → ${CARD_N[nx]}・` + (ok ? t('win', Math.round(bet * .9)) : t('lose', bet)));
+  });
+}
+/* ---------- bank & loan shark ---------- */
+let bankTab = 'bank';
+function showBank(){
+  const bl = S.loans.find(l => l.t === 'bank'), sh = debtOf('shark'), late = S.loans.filter(l => l.t === 'shark').map(l => S.day - l.day);
+  const body = bankTab === 'bank'
+    ? `<p class="muted" style="font-size:13px">${t('bankInfo')}</p>${bl ? `<p class="warn">${t('owe', bl.owed)}</p><button class="btn" data-act="repay" data-k="bank" ${S.money < bl.owed ? 'disabled' : ''}>${t('repayAll', bl.owed)}</button>`
+      : `<div class="row">${LOAN.bank.opts.map(a => `<button class="btn primary" data-act="borrow" data-k="bank" data-a="${a}" ${a > 1000 && S.rep < 3 ? 'disabled' : ''}>${t('borrow', a)} → $${Math.round(a * (1 + LOAN.bank.rate))}</button>`).join('')}</div>`}`
+    : `<div class="row" style="flex-wrap:nowrap;align-items:flex-start">${portraitHTML(SPECIAL.gang.look, L(['虎哥','Anh Hổ']))}<div class="col"><p class="muted" style="font-size:13px">${t('sharkInfo')}</p>
+      ${sh ? `<p class="bad">${t('owe', sh)}・${t('daysLeft', Math.max(...late))}</p><div class="row"><button class="btn" data-act="repay" data-k="shark" data-a="500" ${S.money < Math.min(500, sh) ? 'disabled' : ''}>${t('repay500')}</button><button class="btn primary" data-act="repay" data-k="shark" ${S.money < sh ? 'disabled' : ''}>${t('repayAll', sh)}</button></div>` : `<p class="good">${t('noDebt')}</p>`}
+      <div class="row">${LOAN.shark.opts.map(a => `<button class="btn danger" data-act="borrow" data-k="shark" data-a="${a}">${t('borrow', a)}</button>`).join('')}</div></div></div>`;
+  openModal(`<div class="shead"><h2>${esc(L(SHOPS.bank.name))}</h2><span class="num" style="font-size:24px;color:var(--gold)">$${S.money}</span><button class="btn small ghost" data-act="close">${t('close')}</button></div>
+    <div class="tabs"><button class="btn small ${bankTab === 'bank' ? 'on' : ''}" data-act="banktab" data-k="bank">🏦 ${t('bankTab')}</button><button class="btn small ${bankTab === 'shark' ? 'on' : ''}" data-act="banktab" data-k="shark">🐯 ${t('sharkTab')}</button></div>${body}`);
   paintPortraits($('#sheet'));
 }
 
@@ -332,7 +413,7 @@ function showSaves(msg = ''){
   f.addEventListener('change', () => { const file = f.files && f.files[0]; if (!file) return; const r = new FileReader(); r.onload = () => { $('#importBox').value = String(r.result || ''); }; r.readAsText(file); });
 }
 function doImport(){
-  let o = null; try { o = JSON.parse(($('#importBox').value || '').trim()); } catch (e) {}
+  let o = null; try { o = patch(JSON.parse(($('#importBox').value || '').trim())); } catch (e) {}
   const s = valid(o) ? o : migrate(o);
   if (!s) { $('#saveMsg').textContent = t('badSave'); sfx.bad(); return; }
   S = s; save(); N = null; closeModal(); toast(t('loaded')); sfx.ok(); showHub();
@@ -401,6 +482,7 @@ function openStall(){
     const opts = ['gang']; if (S.day >= 4) opts.push('blackout'); if (S.day >= 5) opts.push('ghost', 'ghost');
     N.event = pick(opts); N.eventAt = 1 + rnd(Math.max(1, n - 2)) + 1;
   }
+  if (sharkLate()) { N.event = 'shark'; N.eventAt = 1; }
   sfx.ok(); go('night'); renderNightUI();
 }
 function simNight(dt){
@@ -416,7 +498,7 @@ function simNight(dt){
     else if (p.state === 'out') moveTo(p, dt);
     else if (p.state === 'stand') p.arrived = moveTo(p, dt);
     else if (p.state === 'wait') { if (!frozen) p.pat -= dt * .5; if (p.pat <= 0) { leaveAngry(p); dockDirty = true; } }
-    else if (p.state === 'order') { if (['guess','order','prep','warm','heat'].includes(n.phase)) p.pat -= dt; if (p.pat <= 0) activeTimeout(); }
+    else if (p.state === 'order') { if (['order','prep','warm','heat'].includes(n.phase)) p.pat -= dt; if (p.pat <= 0) activeTimeout(); }
     else if (p.state === 'eat') { p.eatT -= dt; if (p.eatT <= 0) goOut(p, 'happy'); }
   }
   n.people = n.people.filter(p => !(p.state === 'out' && Math.abs(p.x - ART.EXIT_X) < 1));
@@ -445,21 +527,11 @@ function activeTimeout(){
 function beginOrder(p){
   if (!N || N.phase !== 'idle' || p.state !== 'wait') return;
   N.active = p; p.state = 'order'; p.mood = null; sfx.tap();
-  if (p.type === 'story') {
-    const others = shuffle(unlocked().filter(j => j !== p.dish));
-    let wrong = others.slice(0, 2);
-    if (wrong.length < 2) wrong = wrong.concat(shuffle(DISHES.map((d, j) => j).filter(j => j !== p.dish && !wrong.includes(j) && DISHES[j].zone <= Math.max(1, S.zone))).slice(0, 2 - wrong.length));
-    if (S.stats.memory >= 4) wrong = wrong.slice(0, 1);
-    p.options = shuffle([p.dish, ...wrong]); p.struck = [];
-    N.phase = 'guess';
-  } else N.phase = 'order';
-  renderNightUI();
+  if (p.extra === undefined) { const ex = EXTRAS.filter(e => !DISHES[p.dish].steps.includes(e[0])); p.extra = Math.random() < .45 && ex.length ? pick(ex) : null; }
+  N.phase = 'order'; renderNightUI();
 }
-function onGuess(j){
-  const p = N.active;
-  if (j !== p.dish) { sfx.bad(); p.struck.push(j); p.pat -= p.max * .25; toast(L(['「不是這個味道……」','"Không phải vị này..."'])); renderNightUI(); return; }
-  confirmCook();
-}
+const missPen = () => clamp(.14 - S.stats.memory * .008, .05, .14);
+function miss(){ const p = N.active; if (p) p.pat -= p.max * missPen(); N.c.misses = (N.c.misses || 0) + 1; sfx.bad(); flash('miss'); }
 function confirmCook(){
   const p = N.active, i = p.dish, miss = lacking(i);
   if (miss.length) { N.active = null; N.phase = 'idle';
@@ -468,19 +540,22 @@ function confirmCook(){
   DISHES[i].steps.forEach(take);
   let noSeason = !take('鹽'); if (DISHES[i].sweet && !take('糖')) noSeason = true;
   S.stamina = Math.max(0, S.stamina - 12);
-  N.c = { i, m: DISHES[i].m, noSeason }; sfx.ok(); renderHud(); startPrep();
+  N.c = { i, m: DISHES[i].m, noSeason, extra: p.extra ? p.extra[0] : null }; sfx.ok(); renderHud(); startPrep();
 }
 
 /* ---------- night: cooking minigames ---------- */
 function startPrep(){
   const c = N.c, d = DISHES[c.i];
-  c.pool = shuffle(d.steps.concat(shuffle(Object.keys(ING).filter(s => !d.steps.includes(s) && !ING[s].seas)).slice(0, 4)));
-  c.step = 0; c.mistakes = 0; c.correct = 0; c.pmax = prepMax(); c.prep = c.pmax;
+  c.steps = d.steps.concat(c.extra ? [c.extra] : []);
+  c.pool = shuffle(c.steps.concat(shuffle(Object.keys(ING).filter(s => !c.steps.includes(s) && !ING[s].seas)).slice(0, 8 - c.steps.length)));
+  c.extraDone = false; c.step = 0; c.mistakes = 0; c.correct = 0; c.pmax = prepMax(); c.prep = c.pmax;
   N.phase = 'prep'; renderNightUI();
 }
 function onIng(s, el){
-  const c = N.c, d = DISHES[c.i];
-  if (s === d.steps[c.step]) { c.step++; c.correct++; sfx.tap(); if (c.step >= 4) return startWarm(); renderNightUI(); }
+  const c = N.c;
+  if (s === c.steps[c.step]) {
+    if (c.step === 4) { if (!take(s)) return; c.extraDone = true; } else c.correct++;
+    c.step++; sfx.tap(); if (c.step >= c.steps.length) return startWarm(); renderNightUI(); }
   else { c.mistakes++; sfx.bad(); if (el) { el.classList.remove('shake'); void el.offsetWidth; el.classList.add('shake'); }
     const m = $('#misses'); if (m) m.textContent = t('miss', c.mistakes); }
 }
@@ -492,7 +567,7 @@ function startHeat(){
   const c = N.c, lv = S.tools[c.m], g = METHODS[c.m].game;
   Object.assign(c, { game: g, pos: 0, dir: 1, prog: 0, hold: false, hits: [], burnt: false, q: 0,
     zw: zoneW(c.m), speed: ptrSpeed(c.m, DISHES[c.i].zone), hmax: 7 + (lv - 1) * .8 });
-  c.zc = g === 'sweep' ? 45 + c.zw / 2 + Math.random() * Math.max(0, 40 - c.zw) : 10 + c.zw / 2 + Math.random() * (80 - c.zw);
+  c.zc = 10 + c.zw / 2 + Math.random() * (80 - c.zw); c.pass = 0; c.maxPass = lv >= 4 ? 4 : 3;
   if (g === 'hold') { c.zw = Math.min(60, c.zw * 1.8); c.zc = 30 + Math.random() * 40; c.pos = 10; }
   if (g === 'arrows') { c.seq = Array.from({ length: 6 - Math.floor((lv - 1) / 2) }, () => rnd(4)); c.idx = 0; }
   if (g === 'rhythm') { const gap = 1 - (lv - 1) * .05; c.notes = Array.from({ length: 5 }, (_, k) => ({ at: 1.4 + k * gap + (k % 2 ? .15 : 0), r: -1 }));
@@ -502,7 +577,8 @@ function startHeat(){
 function stepHeat(dt){
   const c = N.c, g = c.game, sp = c.speed;
   if (g !== 'sweep') { c.ht -= dt; if (c.ht <= 0) return timeoutHeat(); }
-  if (g === 'sweep') { c.pos += sp * (.5 + c.pos / 120) * dt; if (c.pos >= 100) { c.pos = 100; c.burnt = true; finishHeat(0); } }
+  if (g === 'sweep') { c.pos += c.dir * sp * (.55 + c.pass * .2) * dt;
+    if (c.pos >= 100 || c.pos <= 0) { c.pos = clamp(c.pos, 0, 100); c.dir *= -1; if (++c.pass >= c.maxPass) { c.burnt = true; finishHeat(0); } } }
   else if (g === 'mash') { c.prog = Math.max(0, c.prog - 14 * dt); c.pos = c.prog; }
   else if (g === 'hold') {
     c.pos = clamp(c.pos + (c.hold ? 60 : -48) * dt * (sp / 110) + Math.sin(T * 2.7) * 14 * dt, 0, 100);
@@ -528,22 +604,22 @@ function heatAction(k){ // k = 'tap' or an arrow index
   const c = N && N.c; if (!c || N.phase !== 'heat') return;
   const g = c.game;
   if (g === 'mash') { c.prog += 8 + (S.tools[c.m] - 1) * 2.5 + S.stats.heat * .6; sfx.tap(); if (c.prog >= 100) finishHeat(1); }
-  else if (g === 'sweep') finishHeat(zoneQ());
+  else if (g === 'sweep') { const q = zoneQ(); if (q > 0) finishHeat(q); else miss(); }
   else if (g === 'multi') {
-    const q = zoneQ(); c.hits.push(q); q >= 1 ? sfx.ok() : q > 0 ? sfx.tap() : sfx.bad(); flash(q >= 1 ? 'perfect' : q > 0 ? 'good' : 'miss');
+    const q = zoneQ(); if (!q) return miss(); c.hits.push(q); q >= 1 ? sfx.ok() : sfx.tap(); flash(q >= 1 ? 'perfect' : 'good');
     if (c.hits.length >= 3) return finishHeat(avg(c.hits));
     c.zc = 10 + c.zw / 2 + Math.random() * (80 - c.zw);
   }
   else if (g === 'arrows') {
     if (typeof k !== 'number') return;
     if (k === c.seq[c.idx]) { c.idx++; sfx.tap(); if (c.idx >= c.seq.length) return finishHeat(1); }
-    else { c.idx = 0; sfx.bad(); flash('miss'); }
+    else { c.idx = 0; miss(); }
     const el = $('#arrows'); if (el) el.innerHTML = arrowsHTML();
   }
   else if (g === 'rhythm') {
     const nn = c.notes.filter(x => x.r < 0).sort((x, y) => Math.abs(x.at - c.clock) - Math.abs(y.at - c.clock))[0]; if (!nn) return;
     const d = Math.abs(nn.at - c.clock);
-    if (d <= c.win) { nn.r = 1; sfx.ok(); flash('perfect'); } else if (d <= c.win * 2) { nn.r = .6; sfx.tap(); flash('good'); } else sfx.bad();
+    if (d <= c.win) { nn.r = 1; sfx.ok(); flash('perfect'); } else if (d <= c.win * 2) { nn.r = .6; sfx.tap(); flash('good'); } else miss();
   }
 }
 function finishHeat(q){ if (!N || N.phase !== 'heat') return; N.c.q = q; onStop(); }
@@ -556,7 +632,7 @@ function arrowsHTML(){ const c = N.c; if (!c.seq) return ""; return c.seq.map((a
 function onStop(){
   const c = N.c, p = N.active, q = c.q || 0;
   const heat = c.burnt ? 0 : q >= .8 ? 30 : q >= .45 ? 15 : 0;
-  const ing = Math.round(50 * c.correct / (4 + c.mistakes));
+  const ing = Math.round(50 * Math.min(4, c.correct) / (4 + c.mistakes));
   const speed = Math.round(20 * clamp(p.pat / p.max, 0, 1));
   const total = Math.max(0, ing + heat + speed - (c.noSeason ? 15 : 0));
   const tier = total >= 80 ? 1 : total >= 50 ? 2 : 3;
@@ -585,6 +661,8 @@ function onServe(){
   else {
     got = price; N.log[r.tier === 1 ? 'perfect' : 'normal']++; addExp((r.tier === 1 ? 30 : 15) + z * 5);
     if (r.tier === 1) { const tip = 10 + S.stats.charm * 5; got += tip; N.log.tips += tip; }
+    if (c.extra && c.extraDone) { const xt = 25 + S.stats.memory * 8; got += xt; N.log.tips += xt; S.rep = clamp(S.rep + .1, 1, 5); toast(t('extraOk', xt)); }
+    else if (c.extra) { S.rep = clamp(S.rep - .1, 1, 5); toast(t('extraMiss')); }
     if (p.type === 'boss') {
       if (['SR','SSR','UR'].includes(r.rank.id)) { const bonus = price * 2 + 200; got += bonus; N.log.tips += bonus; S.rep = clamp(S.rep + .3, 1, 5); toast(t('bossOk')); }
       else { S.rep = clamp(S.rep - .6, 1, 5); toast(t('bossBad')); }
@@ -605,7 +683,8 @@ function onServe(){
 function startEvent(){
   const n = N, k = n.event; n.evDone = true; n.phase = 'event';
   n.ev = { k, amt: Math.round((300 + S.day * 15) / 10) * 10, people: [] };
-  if (k === 'gang') {
+  if (k === 'shark') n.ev.amt = debtOf('shark');
+  if (k === 'gang' || k === 'shark') {
     [['gang', 300, 232], ['gang2', 318, 240]].forEach(([s, x, y]) => { const p = { id: Math.random(), type: 'gangX', look: SPECIAL[s].look, name: L(SPECIAL[s].name), x: ART.ENTRY.x, by: ART.ENTRY.by, tx: x, tby: y, seat: -1, state: 'stand', t: 0, mood: 'angry' }; n.people.push(p); n.ev.people.push(p); });
     sfx.thud();
   } else if (k === 'ghost') {
@@ -630,6 +709,9 @@ function evChoice(k){
   else if (k === 'ignore') evOutcome(Math.random() < .5 ? 'ignoreOk' : 'ignoreBad');
   else if (k === 'candle') { S.money -= 60; N.candles = true; N.queue.push(...pickDishes(2)); evOutcome('candle'); }
   else if (k === 'closeup') evOutcome('closeup');
+  else if (k === 'sharkpay') { payDebt('shark', D); evOutcome('sharkpay'); }
+  else if (k === 'sharkhalf') { payDebt('shark', Math.ceil(D / 2)); evOutcome('sharkhalf'); }
+  else if (k === 'sharkrun') { if (Math.random() < .4) evOutcome('sharkrunOk'); else { smash(); S.stamina = Math.max(0, S.stamina - 40); N.people.forEach(p => { if (p.state === 'wait') goOut(p, 'angry'); }); evOutcome('sharkrunBad'); } }
 }
 function smash(){ Object.keys(S.inv).forEach(k => { if (ING[k].f) S.inv[k] = []; }); S.rep = clamp(S.rep - .3, 1, 5); sfx.thud(); }
 function evOutcome(o){
@@ -657,35 +739,30 @@ function renderNightUI(){
   if (n.phase === 'idle') {
     const waiting = n.people.filter(q => q.state === 'wait').length;
     h = `<div class="tip frame">${waiting ? t('tapCustomer') : `<b>${esc(L(SHOP_LV[S.shop - 1].name))}</b>`} ・ ${n.queue.length + n.people.filter(q => q.state === 'in').length + waiting} 🙋${n.secret ? ` ・ ${t('secretLeft', n.secret)}` : ''}</div>`;
-  } else if (n.phase === 'guess' || n.phase === 'order') {
+  } else if (n.phase === 'order') {
     const d = DISHES[p.dish];
-    let text, act;
-    if (n.phase === 'guess') {
-      text = `「${esc(L(d.memory))}」`;
-      act = `<p class="muted" style="font-size:12px">${S.stats.memory >= 2 ? esc(t('clue', L(ZONES[d.zone].cuisine))) : t('guessQ')}</p><div class="opts">${p.options.map(j =>
-        `<button class="opt ${p.struck.includes(j) ? 'no' : ''} ${lacking(j).length ? 'lack' : ''}" data-act="guess" data-i="${j}"><span class="e">${DISHES[j].emoji}</span><span>${esc(dName(j))}<small>${t('stockN', servings(j))}</small></span></button>`).join('')}</div>`;
-    } else {
-      const lines = { normal: L(p.line) + ' ' + t('order', dName(p.dish)), boss: t('vipBoss', dName(p.dish)), critic: t('vipCritic', dName(p.dish)),
-        gang: L(['「先煮一碗{0}來，吃得爽再說。」','"Nấu tao bát {0} trước đã, ăn sướng rồi tính."']).replace('{0}', dName(p.dish)),
-        ghost: L(['「……{0}……好冷……」','"...{0}... lạnh quá..."']).replace('{0}', dName(p.dish)) };
-      text = esc(lines[p.type] || lines.normal);
-      const miss = lacking(p.dish);
-      act = `<div class="row">${p.type === 'boss' ? `<span class="warn" style="font-size:13px">${t('rankNeed', 'SR')}</span>` : ''}
+    const lines = { normal: L(p.line) + ' ' + t('order', dName(p.dish)), boss: t('vipBoss', dName(p.dish)), critic: t('vipCritic', dName(p.dish)),
+      story: `「${L(d.memory)}」 ${t('wantDish', dName(p.dish))}`,
+      gang: L(['「先煮一碗{0}來，吃得爽再說。」','"Nấu tao bát {0} trước đã, ăn sướng rồi tính."']).replace('{0}', dName(p.dish)),
+      ghost: L(['「……{0}……好冷……」','"...{0}... lạnh quá..."']).replace('{0}', dName(p.dish)) };
+    const text = esc(lines[p.type] || lines.normal) + (p.extra ? `<br><b class="warn">✦ ${esc(t('extraReq', L(p.extra[1])))}</b>` : '');
+    const need = d.steps.concat(p.extra ? [p.extra[0]] : []).map((k, j) => `<span class="chip ${have(k) ? '' : 'none'} ${j === 4 ? 'here' : ''}">${ING[k].e} ${esc(ingName(k))} <b>${have(k)}</b></span>`).join('');
+    const miss = lacking(p.dish);
+    const act = `<div class="rchips"><span class="muted" style="font-size:12px">${t('needIng')}</span>${need}</div><div class="row">${p.type === 'boss' ? `<span class="warn" style="font-size:13px">${t('rankNeed', 'SR')}</span>` : ''}
         ${miss.length ? `<span class="bad" style="font-size:13px">${esc(miss.map(ingName).join('、'))} ✕</span>` : ''}<span style="flex:1"></span>
         <button class="btn primary" data-act="cookit">${DISHES[p.dish].emoji} ${t('cookIt')} ・ ${esc(L(METHODS[d.m].name))}</button></div>`;
-    }
     const tag = p.type === 'story' ? `<span class="tag story">STORY</span>` : p.type === 'boss' || p.type === 'critic' ? `<span class="tag vip">VIP</span>` : p.type === 'gang' || p.type === 'ghost' ? `<span class="tag ev">EVENT</span>` : '';
     h = `<div class="dlg frame ${p.type === 'story' || tag ? 'gold' : ''}">${portraitHTML(p.look, p.name)}<div class="dbody">
       <p class="dtext"><span class="who">${esc(p.name)}${tag}</span>${text}</p>${act}${patBar(p)}</div></div>`;
   } else if (['prep','warm','heat','result'].includes(n.phase)) h = cookPanel();
   else if (n.phase === 'event') {
     const ev = EVENTS[n.ev.k], who = ev.who ? SPECIAL[ev.who] : null, D = n.ev.amt;
-    const dis = k => (k === 'pay' && S.money < D) || (k === 'salt' && have('鹽') < 3) || (k === 'candle' && S.money < 60);
+    const dis = k => ((k === 'pay' || k === 'sharkpay') && S.money < D) || (k === 'sharkhalf' && S.money < Math.ceil(D / 2)) || (k === 'salt' && have('鹽') < 3) || (k === 'candle' && S.money < 60);
     h = `<div class="dlg frame gold">${who ? portraitHTML(who.look, L(who.name)) : ''}<div class="dbody">
       <p class="dtext"><span class="who">${who ? esc(L(who.name)) : '⚡'}<span class="tag ev">EVENT</span></span>${esc(L(ev.text).replace('{0}', D))}</p>
       <div class="opts">${ev.choices.map(([k, lab]) => `<button class="opt" data-act="ev" data-k="${k}" ${dis(k) ? 'disabled style="opacity:.35"' : ''}><span>${esc(L(lab).replace('{0}', D))}</span></button>`).join('')}</div></div></div>`;
   } else if (n.phase === 'evout') {
-    const o = n.ev.out, good = ['pay','haggleOk','feedOk','policeOk','ghostOk','salt','ignoreOk','candle','closeup'].includes(o);
+    const o = n.ev.out, good = ['sharkpay','sharkhalf','sharkrunOk','pay','haggleOk','feedOk','policeOk','ghostOk','salt','ignoreOk','candle','closeup'].includes(o);
     h = `<div class="dlg frame"><div class="dbody"><p class="tier ${good ? 't1' : 't3'}">${esc(L(EV_OUT[o]))}</p>
       <div class="row" style="justify-content:flex-end"><button class="btn primary" data-act="evdone">${t('confirm')}</button></div></div></div>`;
   }
@@ -700,9 +777,10 @@ function cookPanel(){
     side = `<div class="row"><b>${t('prepT')}</b><span class="muted" id="misses" style="margin-left:auto;font-size:13px">${t('miss', c.mistakes)}</span></div>
       <p class="muted" style="font-size:12px">${t('prepHint')}</p>
       <div class="timer"><i id="prepbar"></i></div>
-      <div class="slots">${d.steps.map((s, k) => `<div class="slot ${k < c.step ? 'done' : k === c.step ? 'next' : ''}"><span>${ING[s].e}</span><small>${k + 1}. ${esc(ingName(s))}</small></div>`).join('')}</div>
-      <div class="ings">${c.pool.map(s => { const used = d.steps.indexOf(s) > -1 && d.steps.indexOf(s) < c.step, glow = !used && s === d.steps[c.step];
-        return `<button class="ing ${used ? 'used' : ''} ${glow ? 'glow' : ''}" data-act="ing" data-s="${esc(s)}"><span class="e">${ING[s].e}</span>${esc(ingName(s))}</button>`; }).join('')}</div>`;
+      <div class="slots" style="grid-template-columns:repeat(${c.steps.length},1fr)">${c.steps.map((s, k) => `<div class="slot ${k < c.step ? 'done' : k === c.step ? 'next' : ''}"><span>${ING[s].e}</span><small>${k < 4 ? k + 1 + '.' : '✦'} ${esc(ingName(s))}</small></div>`).join('')}</div>
+      <div class="ings">${c.pool.map(s => { const used = c.steps.indexOf(s) > -1 && c.steps.indexOf(s) < c.step, glow = !used && s === c.steps[c.step];
+        return `<button class="ing ${used ? 'used' : ''} ${glow ? 'glow' : ''}" data-act="ing" data-s="${esc(s)}"><span class="e">${ING[s].e}</span>${esc(ingName(s))}</button>`; }).join('')}</div>
+      ${c.extra && c.step === 4 ? `<button class="btn small" data-act="skipextra">${have(c.extra) ? '' : `${esc(ingName(c.extra))} ✕・`}${t('skipExtra')}</button>` : ''}`;
   } else if (n.phase === 'warm') {
     side = `<p class="tier t2">${t('heating')}</p><p class="muted" style="font-size:13px">${esc(L(METHODS[c.m].verb))}</p><div class="timer"><i id="warmbar"></i></div>`;
   } else if (n.phase === 'heat') {
@@ -752,7 +830,7 @@ function updateBars(){
   if (zy) { zy.style.left = (c.zc - c.zw / 2 - 8) + '%'; zy.style.width = (c.zw + 16) + '%'; }
   if (N.phase !== 'heat') return;
   const hp = $('#hprog'); if (hp) hp.style.width = clamp(c.prog, 0, 100) + '%';
-  const ht = $('#htime'); if (ht) ht.textContent = c.game === 'sweep' ? '' : t('timeLeft', Math.max(0, c.ht).toFixed(1));
+  const ht = $('#htime'); if (ht) ht.textContent = c.game === 'sweep' ? t('passes', c.maxPass - c.pass) : t('timeLeft', Math.max(0, c.ht).toFixed(1));
   const hh = $('#hhits'); if (hh) hh.textContent = t('hits', c.hits.length);
   if (c.notes) c.notes.forEach((x, k) => { const el = $('#note' + k); if (!el) return; const px = 12 + (x.at - c.clock) * 45;
     el.style.left = px + '%'; el.style.opacity = x.r < 0 ? (px < 104 ? 1 : 0) : .25; el.className = 'note' + (x.r === 1 ? ' hit' : x.r === 0 ? ' miss' : ''); });
@@ -762,6 +840,7 @@ function updateBars(){
 function endNight(reason){
   const fresh = freshDays(); let spoiled = 0;
   for (const k of Object.keys(S.inv)) { if (!ING[k].f) continue; const b = S.inv[k].length; S.inv[k] = S.inv[k].filter(d => S.day - d + 1 < fresh); spoiled += b - S.inv[k].length; }
+  S.loans.forEach(l => { if (l.t === 'shark') l.owed = Math.round(l.owed * (1 + LOAN.shark.rate)); });
   S.zoneNights++;
   let newZone = -1;
   if (S.zone < 4 && S.zoneNights >= 3 && S.rep >= 3 && zoneDone(S.zone)) { S.zone++; S.zoneNights = 0; newZone = S.zone; }
@@ -789,12 +868,12 @@ function showBills(){
   const b = bills(), tot = billTotal(), ok = S.money >= tot;
   layer.innerHTML = `<div class="full"><div class="summary frame gold"><p class="eyebrow">${t('billT')}</p><h2>${t('day', S.day - 1)}・${L(STR.wd)[6]}</h2>
     <div class="score"><span>${t('rent')}（${esc(L(SHOP_LV[S.shop - 1].name))}）</span><span class="num">$${b.rent}</span><span>${t('power')}</span><span class="num">$${b.power}</span>
-      <span>${t('hospital')}</span><span class="num">$${b.hosp}</span></div>
+      <span>${t('hospital')}</span><span class="num">$${b.hosp}</span>${b.bank ? `<span>${t('bankLoanBill')}</span><span class="num">$${b.bank}</span>` : ''}</div>
     <div class="total"><span>${t('total')}</span><span class="num">$${tot}</span></div>
     <p class="${ok ? 'muted' : 'bad'}">${ok ? t('afterPay', S.money - tot) : t('overMsg')}</p>
     <button class="btn ${ok ? 'primary' : 'danger'} big" data-act="${ok ? 'paybill' : 'gameover'}">${ok ? t('pay') : t('confirm')}</button></div></div>`;
 }
-function payBill(){ S.money -= billTotal(); pendingBill = false; save(); sfx.coin(); showHub(); }
+function payBill(){ S.money -= billTotal(); S.loans = S.loans.filter(l => l.t !== 'bank'); pendingBill = false; save(); sfx.coin(); showHub(); }
 function showOver(){
   const st = S ? [S.day - 1, S.served, cardsDone()] : [0, 0, 0];
   try { localStorage.removeItem(SAVE_KEY); localStorage.removeItem(OLD_KEY); } catch (e) {}
@@ -853,11 +932,22 @@ document.addEventListener('click', e => {
     case 'map': showMap(); break;
     case 'tostall': showHub(); break;
     case 'spot': { const k = b.dataset.k; sfx.tap(); cart = {};
-      if (k === 'stall') showHub(); else if (k === 'workshop') showWorkshop(); else if (k === 'hospital') showHospital(); else showShop(k); break; }
-    case 'cart': { const k = b.dataset.k; cart[k] = clamp((cart[k] || 0) + (+b.dataset.d), 0, 30); sfx.tap(); showShop(shopKey); break; }
+      if (k === 'stall') showHub(); else if (k === 'workshop') showWorkshop(); else if (k === 'hospital') showHospital(); else if (k === 'casino') showCasino(); else if (k === 'bank') showBank(); else showShop(k); break; }
+    case 'cart': { const k = b.dataset.k; if (!shopKey) break; const sc = $('#sheet').scrollTop; cart[k] = clamp((cart[k] || 0) + (+b.dataset.d), 0, 30); sfx.tap(); showShop(shopKey); $('#sheet').scrollTop = sc; break; }
+    case 'recipes': shopKey = ''; showRecipes(); break;
+    case 'castab': casTab = b.dataset.k; CAS.msg = ''; CAS.ok = 0; showCasino(); break;
+    case 'casbet': casBet = +b.dataset.k; showCasino(); break;
+    case 'casdice': casDice(b.dataset.k); break;
+    case 'casslot': casSlot(); break;
+    case 'cascard': casCard(b.dataset.k); break;
+    case 'banktab': bankTab = b.dataset.k; showBank(); break;
+    case 'borrow': { const a = +b.dataset.a, k = b.dataset.k; if (k === 'bank' && S.loans.some(l => l.t === 'bank')) break;
+      S.money += a; S.loans.push({ t: k, owed: k === 'bank' ? Math.round(a * (1 + LOAN.bank.rate)) : a, day: S.day }); save(); sfx.coin(); toast(t('borrowed', a)); renderHud(); showBank(); break; }
+    case 'repay': { const k = b.dataset.k, amt = b.dataset.a ? Math.min(+b.dataset.a, debtOf(k)) : debtOf(k); if (S.money < amt) break; payDebt(k, amt); save(); sfx.coin(); toast(t('repaid')); renderHud(); showBank(); break; }
+    case 'skipextra': if (N && N.c && N.phase === 'prep') { N.c.step = N.c.steps.length; startWarm(); } break;
     case 'cartfill': { cart = {}; let any = 0; shopItems(shopKey).forEach(k => { const need = targetUnits(k) - have(k); if (need > 0) { cart[k] = Math.ceil(need / ING[k].n); any = 1; } });
       if (!any) toast(t('needNothing')); sfx.tap(); showShop(shopKey); break; }
-    case 'buy': { const total = Object.entries(cart).reduce((n, [k, q]) => n + ING[k].p * q, 0); if (!total || total > S.money) break;
+    case 'buy': { if (!shopKey) break; const total = Object.entries(cart).reduce((n, [k, q]) => n + ING[k].p * q, 0); if (!total || total > S.money) break;
       S.money -= total; Object.entries(cart).forEach(([k, q]) => addInv(k, q * ING[k].n)); cart = {}; save(); sfx.coin(); toast(t('bought')); showShop(shopKey); renderHud(); break; }
     case 'wstab': wsTab = b.dataset.k; showWorkshop(); break;
     case 'uptool': { const m = b.dataset.k, c = TOOL_COST[S.tools[m]]; if (S.tools[m] < 5 && S.money >= c) { S.money -= c; S.tools[m]++; save(); sfx.lantern(); toast(`${L(METHODS[m].name)} → ${L(TOOL_TIERS[S.tools[m] - 1].name)}`); showWorkshop(); renderHud(); } break; }
@@ -877,7 +967,6 @@ document.addEventListener('click', e => {
     case 'open': openStall(); break;
     case 'servenext': { const w = N && N.people.filter(p => p.state === 'wait' && p.type !== 'ghostX').sort((x, y) => x.pat - y.pat)[0]; if (w) beginOrder(w); break; }
     case 'closeearly': if (N && N.phase === 'idle') { N.queue = []; N.stopSpawn = true; N.reason = t('closedEarly'); N.people.forEach(p => { if (p.state === 'wait' || p.state === 'in') goOut(p, null); }); renderDock(); } break;
-    case 'guess': onGuess(+b.dataset.i); break;
     case 'cookit': confirmCook(); break;
     case 'ing': onIng(b.dataset.s, b); break;
     case 'stop': heatAction('tap'); break;

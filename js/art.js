@@ -126,7 +126,7 @@ const ART = (() => {
   ];
   const SEATS = TABLES.map(ts => ts.flatMap(([cx, by]) => [{ x: cx - 16, by, flip: false }, { x: cx + 16, by, flip: true }]));
   const ENTRY = { x: -14, by: 238 }, EXIT_X = 494;
-  const MAP_SPOTS = { stall: { x: 240, y: 205 }, harbor: { x: 150, y: 205 }, market: { x: 215, y: 110 }, grocery: { x: 345, y: 85 }, workshop: { x: 410, y: 175 }, hospital: { x: 70, y: 90 } };
+  const MAP_SPOTS = { stall: { x: 240, y: 205 }, harbor: { x: 150, y: 205 }, market: { x: 215, y: 110 }, grocery: { x: 345, y: 85 }, workshop: { x: 410, y: 175 }, hospital: { x: 70, y: 90 }, casino: { x: 318, y: 165 }, bank: { x: 440, y: 98 } };
 
   /* ------------------------------------------------------------------ cooking close-up */
   function flames(g, x, y, w, k, t) {
@@ -451,7 +451,7 @@ const ART = (() => {
     for (let y = 140; y < 270; y++) { const sx = 125 + rnd(4 * sin((y - 140) / 14)); R(g, 0, y, sx, 1, '#1B2A4A'); R(g, sx, y, 3, 1, '#7FA8C9'); R(g, sx + 3, y, 2, 1, '#2f4a66'); }
     // roads
     const S = MAP_SPOTS, road = (a, b) => { const w = 7; R(g, a.x - 3, a.y, w, 1, '#3A3F5C'); const x0 = Math.min(a.x, b.x) - 3, x1 = Math.max(a.x, b.x) + 4, y0 = Math.min(a.y, b.y) - 3, y1 = Math.max(a.y, b.y) + 4; R(g, x0, a.y - 3, x1 - x0, w, '#3A3F5C'); R(g, b.x - 3, y0, w, y1 - y0, '#3A3F5C'); R(g, x0, a.y - 3, x1 - x0, 1, '#4a5078'); R(g, x0, a.y + 3, x1 - x0, 1, '#2a2d46'); for (let x = x0; x < x1; x += 10) R(g, x, a.y, 4, 1, '#555a7a'); for (let y = y0; y < y1; y += 10) R(g, b.x, y, 1, 4, '#555a7a'); };
-    road(S.hospital, S.market); road(S.market, S.grocery); road(S.market, S.stall); road(S.stall, S.harbor); road(S.stall, S.workshop); road(S.grocery, S.workshop);
+    road(S.hospital, S.market); road(S.market, S.grocery); road(S.market, S.stall); road(S.stall, S.harbor); road(S.stall, S.workshop); road(S.grocery, S.workshop); road(S.casino, S.workshop); road(S.grocery, S.bank);
     [[30, 60], [120, 40], [160, 60], [300, 40], [440, 50], [455, 120], [300, 130], [300, 230], [350, 245], [440, 235], [190, 245], [110, 150], [20, 20], [60, 145]].forEach(([x, y], i) => pine(g, x, y, 1 + (i % 2) * .3));
     MAPBG.c = c; return c;
   }
@@ -484,6 +484,15 @@ const ART = (() => {
     // hospital
     const hp = S.hospital; building(g, hp.x - 22, hp.y - 8, 44, 28, '#E7EAF2', '#9aa3b8'); windows(g, hp.x - 18, hp.y - 2, 4, 9, t, 5); windows(g, hp.x - 18, hp.y + 7, 4, 9, t, 9); R(g, hp.x - 3, hp.y + 11, 6, 9, '#6a7388');
     const bl = (t % 1.4) < .9; R(g, hp.x - 4, hp.y - 20, 9, 9, bl ? '#E2574C' : '#7a3a3a'); R(g, hp.x - 1, hp.y - 20, 3, 9, bl ? '#FFB0A8' : '#7a3a3a'); R(g, hp.x - 4, hp.y - 17, 9, 3, bl ? '#FFB0A8' : '#7a3a3a'); R(g, hp.x - 4, hp.y - 20, 9, 9, bl ? '#E2574C' : '#7a3a3a'); R(g, hp.x - 1, hp.y - 20, 3, 9, bl ? '#F7EFE0' : '#8a5a5a'); R(g, hp.x - 4, hp.y - 17, 9, 3, bl ? '#F7EFE0' : '#8a5a5a'); if (bl) glowAt(g, hp.x, hp.y - 15, 16, .2, '#E2574C');
+    // casino: neon frame, gold doors, dice
+    const cs = S.casino; building(g, cs.x - 24, cs.y - 8, 48, 26, '#3a1f4a', '#1a0f24'); R(g, cs.x - 8, cs.y + 4, 16, 14, '#15182B'); R(g, cs.x - 7, cs.y + 5, 6, 13, '#D9A520'); R(g, cs.x + 1, cs.y + 5, 6, 13, '#D9A520');
+    const neon = sin(t * 7) > -.3; R(g, cs.x - 22, cs.y - 16, 44, 7, '#15182B'); for (let i = 0; i < 11; i++) R(g, cs.x - 20 + i * 4, cs.y - 14, 2, 3, neon ? ['#FF6FD8', '#6FF0FF', '#FFE98A'][(i + (t * 4 | 0)) % 3] : '#3a2a4a');
+    if (neon) glowAt(g, cs.x, cs.y - 12, 26, .22, '#FF6FD8');
+    [[-19, 8], [13, 8]].forEach(([dx, dy]) => { R(g, cs.x + dx, cs.y + dy, 6, 6, '#F7EFE0'); R(g, cs.x + dx + 1, cs.y + dy + 1, 1, 1, '#E2574C'); R(g, cs.x + dx + 4, cs.y + dy + 4, 1, 1, '#E2574C'); R(g, cs.x + dx + 2, cs.y + dy + 2, 2, 2, '#15182B'); });
+    // bank: columns + coin sign; a shady alley door beside it
+    const bk = S.bank; building(g, bk.x - 20, bk.y - 6, 34, 24, '#C9C2B0', '#7a6f5a'); for (let i = 0; i < 4; i++) R(g, bk.x - 17 + i * 8, bk.y - 2, 3, 20, '#EDE6D3');
+    R(g, bk.x - 5, bk.y - 16, 10, 10, '#D9A520'); R(g, bk.x - 3, bk.y - 14, 6, 6, '#FFE98A'); R(g, bk.x - 1, bk.y - 14, 2, 6, '#B8862E');
+    R(g, bk.x + 16, bk.y + 4, 10, 14, '#1a1a22'); R(g, bk.x + 18, bk.y + 6, 6, 12, '#0c0c12'); if (sin(t * 3) > .2) { R(g, bk.x + 19, bk.y + 1, 4, 2, '#E2574C'); glowAt(g, bk.x + 21, bk.y + 2, 7, .25, '#E2574C'); }
     // player's stall
     const sp = S.stall, slv = st.lv || 1; R(g, sp.x - 16, sp.y - 2, 32, 18, '#5a4030'); R(g, sp.x - 16, sp.y + 8, 32, 8, '#3d2a1e'); R(g, sp.x - 18, sp.y - 8, 36, 7, slv > 1 ? '#E2574C' : '#5C6B73'); for (let i = 0; i < 36; i += 6) R(g, sp.x - 18 + i, sp.y - 8, 3, 7, slv > 1 ? '#F7EFE0' : '#7A5A3A'); R(g, sp.x - 18, sp.y - 1, 36, 1, '#15182B'); R(g, sp.x - 16, sp.y - 2, 2, 18, '#7a5638'); R(g, sp.x + 14, sp.y - 2, 2, 18, '#7a5638');
     [-12, 12].forEach((dx, i) => { const f = .18 + .06 * sin(t * 5 + i * 2); glowAt(g, sp.x + dx, sp.y + 3, 13, f); R(g, sp.x + dx - 2, sp.y, 5, 6, '#E2574C'); R(g, sp.x + dx - 1, sp.y + 1, 3, 4, '#F2A33A'); });
