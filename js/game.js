@@ -423,7 +423,7 @@ function simNight(dt){
   if (dockDirty && n.phase === 'idle') renderDock();
   if (n.phase === 'prep') { n.c.prep -= dt; if (n.c.prep <= 0) { toast(t('timeUp')); startWarm(); } }
   else if (n.phase === 'warm') { n.c.warm -= dt; if (n.c.warm <= 0) startHeat(); }
-  else if (n.phase === 'heat') stepPointer(dt);
+  else if (n.phase === 'heat') stepHeat(dt);
   if (n.event && !n.evDone && n.spawned >= n.eventAt && n.phase === 'idle') startEvent();
   if (n.phase === 'idle' && !n.stopSpawn && S.stamina < 12) {
     n.stopSpawn = true; n.queue = []; n.reason = t('staminaOut');
@@ -485,24 +485,77 @@ function onIng(s, el){
     const m = $('#misses'); if (m) m.textContent = t('miss', c.mistakes); }
 }
 function startWarm(){ const c = N.c; c.warm = c.wmax = warmTime(c.m); c.pos = 0; N.phase = 'warm'; sfx.cook(c.m); renderNightUI(); }
+/* Each cookware has its own minigame. Result q (0..1) → heat score 30 / 15 / 0. */
+const ARW = ['←','↑','→','↓'], ARK = { ArrowLeft:0, ArrowUp:1, ArrowRight:2, ArrowDown:3 };
+const avg = a => a.reduce((x, y) => x + y, 0) / a.length;
 function startHeat(){
-  const c = N.c, w = zoneW(c.m), mo = METHODS[c.m].motion;
-  c.zw = w; c.motion = mo; c.speed = ptrSpeed(c.m, DISHES[c.i].zone); c.pos = 0; c.dir = 1; c.acc = 0;
-  c.zc0 = mo === 'fill' ? 45 + w / 2 + Math.random() * Math.max(0, 40 - w) : 10 + w / 2 + Math.random() * (80 - w);
-  c.zc = c.zc0; N.phase = 'heat'; renderNightUI();
+  const c = N.c, lv = S.tools[c.m], g = METHODS[c.m].game;
+  Object.assign(c, { game: g, pos: 0, dir: 1, prog: 0, hold: false, hits: [], burnt: false, q: 0,
+    zw: zoneW(c.m), speed: ptrSpeed(c.m, DISHES[c.i].zone), hmax: 7 + (lv - 1) * .8 });
+  c.zc = g === 'sweep' ? 45 + c.zw / 2 + Math.random() * Math.max(0, 40 - c.zw) : 10 + c.zw / 2 + Math.random() * (80 - c.zw);
+  if (g === 'hold') { c.zw = Math.min(60, c.zw * 1.8); c.zc = 30 + Math.random() * 40; c.pos = 10; }
+  if (g === 'arrows') { c.seq = Array.from({ length: 6 - Math.floor((lv - 1) / 2) }, () => rnd(4)); c.idx = 0; }
+  if (g === 'rhythm') { const gap = 1 - (lv - 1) * .05; c.notes = Array.from({ length: 5 }, (_, k) => ({ at: 1.4 + k * gap + (k % 2 ? .15 : 0), r: -1 }));
+    c.clock = 0; c.win = .13 + (lv - 1) * .03; c.hmax = c.notes[4].at + 1; }
+  c.ht = c.hmax; N.phase = 'heat'; renderNightUI();
 }
-function stepPointer(dt){
-  const c = N.c, sp = c.speed;
-  if (c.motion === 'fill') { c.pos += sp * (.5 + c.pos / 120) * dt; if (c.pos >= 100) { c.pos = 100; c.burnt = true; return onStop(); } return; }
-  if (c.motion === 'pulse') { c.acc += dt; if (c.acc < .2) return; c.pos += c.dir * sp * c.acc; c.acc = 0; }
-  else if (c.motion === 'drift') c.pos += (c.dir * sp * .65 + Math.sin(T * 3.3) * sp * .55) * dt;
-  else c.pos += c.dir * sp * dt;
-  if (c.motion === 'flare') c.zc = clamp(c.zc0 + Math.sin(T * 1.6) * 12, c.zw / 2 + 2, 98 - c.zw / 2);
-  if (c.pos >= 100) { c.pos = 100; c.dir = -1; } if (c.pos <= 0) { c.pos = 0; c.dir = 1; }
+function stepHeat(dt){
+  const c = N.c, g = c.game, sp = c.speed;
+  if (g !== 'sweep') { c.ht -= dt; if (c.ht <= 0) return timeoutHeat(); }
+  if (g === 'sweep') { c.pos += sp * (.5 + c.pos / 120) * dt; if (c.pos >= 100) { c.pos = 100; c.burnt = true; finishHeat(0); } }
+  else if (g === 'mash') { c.prog = Math.max(0, c.prog - 14 * dt); c.pos = c.prog; }
+  else if (g === 'hold') {
+    c.pos = clamp(c.pos + (c.hold ? 60 : -48) * dt * (sp / 110) + Math.sin(T * 2.7) * 14 * dt, 0, 100);
+    if (Math.abs(c.pos - c.zc) <= c.zw / 2) { c.prog += 22 * dt; if (c.prog >= 100) finishHeat(1); }
+  }
+  else if (g === 'multi') { c.pos += c.dir * sp * dt; if (c.pos >= 100) { c.pos = 100; c.dir = -1; } if (c.pos <= 0) { c.pos = 0; c.dir = 1; } }
+  else if (g === 'arrows') c.pos = c.idx / c.seq.length * 100;
+  else if (g === 'rhythm') {
+    c.clock += dt; c.pos = clamp(c.clock / c.hmax * 100, 0, 100);
+    c.notes.forEach(nn => { if (nn.r < 0 && c.clock - nn.at > c.win * 2) { nn.r = 0; flash('miss'); } });
+    if (c.notes.every(nn => nn.r >= 0)) finishHeat(avg(c.notes.map(nn => nn.r)));
+  }
 }
+function timeoutHeat(){
+  const c = N.c, g = c.game;
+  if (g === 'mash' || g === 'hold') return finishHeat(c.prog / 100 * .7);
+  if (g === 'arrows') return finishHeat(c.idx / c.seq.length * .6);
+  if (g === 'multi') return finishHeat(c.hits.reduce((x, y) => x + y, 0) / 3);
+  finishHeat(avg(c.notes.map(nn => Math.max(0, nn.r))));
+}
+const zoneQ = () => { const c = N.c, d = Math.abs(c.pos - c.zc), g = c.zw / 2; return d <= g ? 1 : d <= g + 8 ? .5 : 0; };
+function heatAction(k){ // k = 'tap' or an arrow index
+  const c = N && N.c; if (!c || N.phase !== 'heat') return;
+  const g = c.game;
+  if (g === 'mash') { c.prog += 8 + (S.tools[c.m] - 1) * 2.5 + S.stats.heat * .6; sfx.tap(); if (c.prog >= 100) finishHeat(1); }
+  else if (g === 'sweep') finishHeat(zoneQ());
+  else if (g === 'multi') {
+    const q = zoneQ(); c.hits.push(q); q >= 1 ? sfx.ok() : q > 0 ? sfx.tap() : sfx.bad(); flash(q >= 1 ? 'perfect' : q > 0 ? 'good' : 'miss');
+    if (c.hits.length >= 3) return finishHeat(avg(c.hits));
+    c.zc = 10 + c.zw / 2 + Math.random() * (80 - c.zw);
+  }
+  else if (g === 'arrows') {
+    if (typeof k !== 'number') return;
+    if (k === c.seq[c.idx]) { c.idx++; sfx.tap(); if (c.idx >= c.seq.length) return finishHeat(1); }
+    else { c.idx = 0; sfx.bad(); flash('miss'); }
+    const el = $('#arrows'); if (el) el.innerHTML = arrowsHTML();
+  }
+  else if (g === 'rhythm') {
+    const nn = c.notes.filter(x => x.r < 0).sort((x, y) => Math.abs(x.at - c.clock) - Math.abs(y.at - c.clock))[0]; if (!nn) return;
+    const d = Math.abs(nn.at - c.clock);
+    if (d <= c.win) { nn.r = 1; sfx.ok(); flash('perfect'); } else if (d <= c.win * 2) { nn.r = .6; sfx.tap(); flash('good'); } else sfx.bad();
+  }
+}
+function finishHeat(q){ if (!N || N.phase !== 'heat') return; N.c.q = q; onStop(); }
+function flash(k){
+  const el = $('#hflash'); if (!el) return;
+  el.textContent = k === 'miss' ? 'MISS' : L(k === 'perfect' ? ['完美！','Hoàn hảo!'] : ['不錯！','Khá!']);
+  el.className = 'hflash ' + k; void el.offsetWidth; el.classList.add('go');
+}
+function arrowsHTML(){ const c = N.c; if (!c.seq) return ""; return c.seq.map((a, k) => `<span class="${k < c.idx ? 'ok' : k === c.idx ? 'cur' : ''}">${ARW[a]}</span>`).join(''); }
 function onStop(){
-  const c = N.c, p = N.active, dd = Math.abs(c.pos - c.zc), g = c.zw / 2;
-  const heat = c.burnt ? 0 : dd <= g ? 30 : dd <= g + 8 ? 15 : 0;
+  const c = N.c, p = N.active, q = c.q || 0;
+  const heat = c.burnt ? 0 : q >= .8 ? 30 : q >= .45 ? 15 : 0;
   const ing = Math.round(50 * c.correct / (4 + c.mistakes));
   const speed = Math.round(20 * clamp(p.pat / p.max, 0, 1));
   const total = Math.max(0, ing + heat + speed - (c.noSeason ? 15 : 0));
@@ -644,22 +697,29 @@ function cookPanel(){
   const n = N, c = n.c, d = DISHES[c.i], lv = S.tools[c.m], tier = TOOL_TIERS[lv - 1];
   let side = '';
   if (n.phase === 'prep') {
-    const hints = Math.min(4, S.stats.memory - 1);
     side = `<div class="row"><b>${t('prepT')}</b><span class="muted" id="misses" style="margin-left:auto;font-size:13px">${t('miss', c.mistakes)}</span></div>
-      <p class="muted" style="font-size:12px">${t('prepHint')} ${hints > 0 ? t('prepGlow') : ''}</p>
+      <p class="muted" style="font-size:12px">${t('prepHint')}</p>
       <div class="timer"><i id="prepbar"></i></div>
-      <div class="slots">${d.steps.map((s, k) => `<div class="slot ${k < c.step ? 'done' : ''}">${k < c.step ? ING[s].e : ''}</div>`).join('')}</div>
-      <div class="ings">${c.pool.map(s => { const used = d.steps.indexOf(s) > -1 && d.steps.indexOf(s) < c.step, glow = !used && c.step < hints && s === d.steps[c.step];
+      <div class="slots">${d.steps.map((s, k) => `<div class="slot ${k < c.step ? 'done' : k === c.step ? 'next' : ''}"><span>${ING[s].e}</span><small>${k + 1}. ${esc(ingName(s))}</small></div>`).join('')}</div>
+      <div class="ings">${c.pool.map(s => { const used = d.steps.indexOf(s) > -1 && d.steps.indexOf(s) < c.step, glow = !used && s === d.steps[c.step];
         return `<button class="ing ${used ? 'used' : ''} ${glow ? 'glow' : ''}" data-act="ing" data-s="${esc(s)}"><span class="e">${ING[s].e}</span>${esc(ingName(s))}</button>`; }).join('')}</div>`;
   } else if (n.phase === 'warm') {
     side = `<p class="tier t2">${t('heating')}</p><p class="muted" style="font-size:13px">${esc(L(METHODS[c.m].verb))}</p><div class="timer"><i id="warmbar"></i></div>`;
   } else if (n.phase === 'heat') {
-    const fill = c.motion === 'fill';
-    side = `<div class="row"><b>${esc(L(METHODS[c.m].verb))}</b><span class="muted" style="margin-left:auto;font-size:13px">${t('zoneW', c.zw.toFixed(0))}</span></div>
-      <div class="heat" style="height:${26 + lv * 9}px"><div class="zy" id="zy"></div><div class="zg" id="zg"></div>${fill ? '<div class="burn"></div>' : ''}<div class="ptr" id="ptr"></div></div>
-      <div class="legend"><span style="--c:var(--jade)">${t('perfect')}</span><span style="--c:rgba(242,163,58,.6)">${t('good')}</span><span style="--c:#0B0D18">${t('fail0')}</span></div>
-      <button class="btn primary big" data-act="stop" style="font-size:22px">${esc(L(METHODS[c.m].stop))}</button>
-      <p class="muted" style="font-size:11px;text-align:center">Space / Enter</p>`;
+    const g = c.game, zone = '<div class="zy" id="zy"></div><div class="zg" id="zg"></div>', h = 26 + lv * 9;
+    const bar = inner => `<div class="heat" style="height:${h}px">${inner}<div class="ptr" id="ptr"></div></div>`;
+    const btn = (act = 'stop') => `<button class="btn primary big" data-act="${act}" style="font-size:22px;touch-action:none">${esc(L(METHODS[c.m].stop))}</button>`;
+    const game = {
+      mash: `<div class="heat" style="height:${h}px"><div class="hfill" id="hprog"></div></div>${btn()}`,
+      sweep: bar(zone + '<div class="burn"></div>') + btn(),
+      hold: bar(zone) + `<div class="timer"><i id="hprog" style="background:var(--jade)"></i></div>${btn('hold')}`,
+      multi: bar(zone) + `<p class="muted" style="font-size:13px" id="hhits"></p>${btn()}`,
+      arrows: `<div class="arrows" id="arrows">${arrowsHTML()}</div><div class="row arrowpad">${ARW.map((a, k) => `<button class="btn big" data-act="arrow" data-k="${k}">${a}</button>`).join('')}</div>`,
+      rhythm: `<div class="heat rhythm" style="height:${h + 8}px"><div class="hitline"></div>${(c.notes || []).map((x, k) => `<div class="note" id="note${k}">♨</div>`).join('')}</div>${btn()}`
+    }[g];
+    side = `<div class="row"><b>${esc(L(METHODS[c.m].verb))}</b><span class="muted num" style="margin-left:auto;font-size:18px" id="htime"></span></div>
+      <p class="muted" style="font-size:12px">${t('hw_' + g)}</p>${game}<div id="hflash" class="hflash"></div>
+      <p class="muted" style="font-size:11px;text-align:center">${g === 'arrows' ? '← ↑ → ↓' : g === 'hold' ? t('holdKey') : 'Space / Enter'}</p>`;
   } else {
     const r = c.res, p = n.active;
     const fragLine = p.type === 'story' && r.tier === 1 ? `<p class="good" style="font-size:13px">${S.frags[c.i] < 3 ? t('frag', S.frags[c.i] + 1) : t('fragFull')}</p>` : '';
@@ -690,6 +750,12 @@ function updateBars(){
   const zg = $('#zg'), zy = $('#zy');
   if (zg) { zg.style.left = (c.zc - c.zw / 2) + '%'; zg.style.width = c.zw + '%'; }
   if (zy) { zy.style.left = (c.zc - c.zw / 2 - 8) + '%'; zy.style.width = (c.zw + 16) + '%'; }
+  if (N.phase !== 'heat') return;
+  const hp = $('#hprog'); if (hp) hp.style.width = clamp(c.prog, 0, 100) + '%';
+  const ht = $('#htime'); if (ht) ht.textContent = c.game === 'sweep' ? '' : t('timeLeft', Math.max(0, c.ht).toFixed(1));
+  const hh = $('#hhits'); if (hh) hh.textContent = t('hits', c.hits.length);
+  if (c.notes) c.notes.forEach((x, k) => { const el = $('#note' + k); if (!el) return; const px = 12 + (x.at - c.clock) * 45;
+    el.style.left = px + '%'; el.style.opacity = x.r < 0 ? (px < 104 ? 1 : 0) : .25; el.className = 'note' + (x.r === 1 ? ' hit' : x.r === 0 ? ' miss' : ''); });
 }
 
 /* ---------- night end, bills, game over ---------- */
@@ -814,7 +880,8 @@ document.addEventListener('click', e => {
     case 'guess': onGuess(+b.dataset.i); break;
     case 'cookit': confirmCook(); break;
     case 'ing': onIng(b.dataset.s, b); break;
-    case 'stop': if (N && N.phase === 'heat') onStop(); break;
+    case 'stop': heatAction('tap'); break;
+    case 'arrow': heatAction(+b.dataset.k); break;
     case 'redo': onRedo(); break;
     case 'serve': onServe(); break;
     case 'ev': evChoice(b.dataset.k); break;
@@ -827,8 +894,14 @@ document.addEventListener('click', e => {
 });
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape' && !$('#modal').hidden && !modalOnClose) closeModal();
-  if ((e.key === ' ' || e.key === 'Enter') && N && N.phase === 'heat' && $('#modal').hidden && document.activeElement?.dataset?.act !== 'stop') { e.preventDefault(); onStop(); }
+  if (N && N.phase === 'heat' && $('#modal').hidden) {
+    if (e.key in ARK) { e.preventDefault(); heatAction(ARK[e.key]); }
+    else if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); if (N.c.game === 'hold') N.c.hold = true; else if (!e.repeat) heatAction('tap'); }
+  }
 });
+document.addEventListener('keyup', e => { if ((e.key === ' ' || e.key === 'Enter') && N && N.c) N.c.hold = false; });
+document.addEventListener('pointerdown', e => { if (e.target.closest('[data-act=hold]') && N && N.c) { N.c.hold = true; e.preventDefault(); } });
+['pointerup','pointercancel','pointerleave'].forEach(ev => document.addEventListener(ev, () => { if (N && N.c) N.c.hold = false; }));
 $('#modal').addEventListener('click', e => { if (e.target.id === 'modal' && !modalOnClose) closeModal(); });
 function startNew(){
   S = newState(); starterStock(S); save();

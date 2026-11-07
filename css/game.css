@@ -202,3 +202,26 @@ textarea{width:100%;min-height:80px;background:var(--night-2);color:var(--paper)
 #rotate .ph{font-size:56px;animation:rot 1.6s ease-in-out infinite}
 @keyframes rot{50%{transform:rotate(90deg)}}
 @media (prefers-reduced-motion: reduce){ *{animation-duration:.01ms!important} }
+
+/* prep recipe slots + per-tool minigames */
+.btn{touch-action:manipulation}
+.slot{height:60px;flex-direction:column;gap:1px;font-size:22px;line-height:1}
+.slot span{opacity:.3}
+.slot small{font-size:10px;color:var(--muted);line-height:1.2;text-align:center;padding:0 2px}
+.slot.done span{opacity:1} .slot.done small{color:var(--jade)}
+.slot.next{border-style:solid;border-color:var(--lantern);animation:pulse 1s ease-in-out infinite}
+.slot.next span{opacity:.75}
+@keyframes pulse{50%{box-shadow:0 0 14px rgba(242,163,58,.8)}}
+.hfill{height:100%;width:0;background:repeating-linear-gradient(90deg,var(--lantern) 0 10px,#FFB95A 10px 20px)}
+.arrows{display:flex;gap:6px;justify-content:center}
+.arrows span{width:46px;height:46px;font-size:28px;font-weight:800;border:2px solid var(--line-2);border-radius:6px;display:flex;align-items:center;justify-content:center;background:var(--night-3)}
+.arrows span.ok{background:var(--jade);color:var(--ink);border-color:var(--jade)}
+.arrows span.cur{border-color:var(--lantern);box-shadow:0 0 12px var(--lantern);transform:scale(1.1)}
+.arrowpad .btn{flex:1;font-size:26px}
+.rhythm .hitline{position:absolute;left:12%;top:0;bottom:0;width:5px;margin-left:-2px;background:var(--jade);box-shadow:0 0 12px var(--jade)}
+.note{position:absolute;top:50%;transform:translate(-50%,-50%);font-size:26px;color:var(--paper);text-shadow:0 0 8px rgba(247,239,224,.8)}
+.note.hit{color:var(--jade)} .note.miss{color:var(--red)}
+.hflash{height:24px;text-align:center;font-weight:900;font-family:var(--display);font-size:22px;opacity:0}
+.hflash.go{animation:fl .7s ease-out}
+.hflash.perfect{color:var(--jade)} .hflash.good{color:var(--lantern)} .hflash.miss{color:var(--red)}
+@keyframes fl{0%{opacity:1;transform:scale(1.5)}100%{opacity:0;transform:scale(1)}}

@@ -25,7 +25,14 @@ const STR = {
   order:['「老闆，來一份{0}！」','"Chủ quán ơi, cho một phần {0}!"'], cookIt:['開始料理','Bắt tay nấu'],
   noIng:['缺少食材：{0}，客人只好離開。','Thiếu nguyên liệu: {0}, khách đành bỏ đi.'],
   noSalt:['沒有鹽或糖了，味道差了一點（-15）','Hết muối/đường, món nhạt đi (-15)'],
-  patience:['耐心','Kiên nhẫn'], prepT:['依序備料','Chuẩn bị theo thứ tự'], prepHint:['照正確順序點選 4 樣食材。','Chọn đúng 4 nguyên liệu theo thứ tự.'], prepGlow:['發光的是月嬤提醒的下一步。','Ô phát sáng là bà Nguyệt nhắc bước tiếp theo.'],
+  patience:['耐心','Kiên nhẫn'], prepT:['依序備料','Chuẩn bị theo thứ tự'], prepHint:['照上面的食譜順序點食材，發光的就是下一樣。','Làm theo công thức phía trên, nguyên liệu phát sáng là món tiếp theo.'],
+  hw_mash:['狂點按鈕（或空白鍵），在時間內把進度條灌滿！','Bấm liên tục (hoặc Space) cho đầy thanh trước khi hết giờ!'],
+  hw_sweep:['指針越跑越快，進綠區時按下翻面；跑到底就燒焦了！','Kim chạy nhanh dần, vào vùng xanh thì bấm lật; chạy tới cuối là cháy!'],
+  hw_hold:['按住加火、放開降溫，讓指針待在綠區直到下方進度滿。','Giữ nút để tăng lửa, thả ra để hạ; giữ kim trong vùng xanh tới khi thanh dưới đầy.'],
+  hw_arrows:['像 Audition 一樣照順序按方向鍵，按錯就要從頭來！','Bấm đúng chuỗi mũi tên như Audition, sai là làm lại từ đầu!'],
+  hw_multi:['油鍋裡有 3 份料：指針每次進綠區就按一下撈起一份。','Có 3 mẻ trong chảo dầu: mỗi lần kim vào vùng xanh thì bấm vớt một mẻ.'],
+  hw_rhythm:['蒸氣音符飛到左邊的線上時按下，跟著節奏！','Bấm khi nốt hơi nước bay chạm vạch bên trái, theo nhịp!'],
+  timeLeft:['{0} 秒','{0}s'], hits:['已撈起 {0}/3','Đã vớt {0}/3'], holdKey:['按住按鈕或空白鍵','Giữ nút hoặc phím Space'],
   miss:['失誤 {0}','Sai {0}'], timeUp:['時間到！先下鍋再說','Hết giờ! Cứ cho vào nồi đã'], heating:['加熱中……','Đang làm nóng...'],
   zoneW:['綠區 {0}%','Vùng xanh {0}%'], perfect:['完美 +30','Hoàn hảo +30'], good:['不錯 +15','Khá +15'], fail0:['失手 0','Hỏng 0'],
   tier1:['完美上菜！','Hoàn hảo!'], tier2:['普通，客人吃飽了','Tạm được, khách no rồi'], tier3:['客人失望地離開了……','Khách thất vọng bỏ đi...'],
@@ -76,15 +83,16 @@ const ZONES = [
   { name:['湄南河攤','Sạp Sông Chao Phraya'], cuisine:['泰國料理','món Thái'] },
   { name:['燈塔碼頭','Bến Hải Đăng'], cuisine:['月嬤的原創融合料理','món sáng tạo của bà Nguyệt'] }
 ];
-// Cooking methods: each has its own art and its own minigame motion.
-// motion: bounce = ping-pong, fill = one sweep that burns at 100, drift = wobbly, flare = bounce with moving zone, pulse = jumps in steps
+// Cooking methods: each has its own art and its own minigame (game):
+// mash = tap fast to fill, sweep = one timed press before it burns, hold = hold to keep the needle in the zone,
+// arrows = Audition-style arrow sequence, multi = 3 timed catches, rhythm = tap notes on the beat
 const METHODS = {
-  wok:     { name:['炒鍋','Chảo xào'],  verb:['大火快炒','Xào lửa lớn'], stop:['起鍋！','Nhấc chảo!'], motion:'bounce', icon:'🔥' },
-  pan:     { name:['平底鍋','Chảo rán'], verb:['煎到金黃','Rán vàng'], stop:['翻面起鍋！','Lật & nhấc!'], motion:'fill', icon:'🍳' },
-  pot:     { name:['湯鍋','Nồi nấu'],   verb:['慢火熬煮','Ninh lửa nhỏ'], stop:['關火！','Tắt bếp!'], motion:'drift', icon:'🍲' },
-  grill:   { name:['烤架','Vỉ nướng'],  verb:['炭火燒烤','Nướng than'], stop:['取下！','Gắp ra!'], motion:'flare', icon:'♨️' },
-  fryer:   { name:['油鍋','Nồi chiên'], verb:['熱油酥炸','Chiên ngập dầu'], stop:['撈起！','Vớt lên!'], motion:'fill', icon:'🫕' },
-  steamer: { name:['蒸籠','Xửng hấp'],  verb:['大火蒸熟','Hấp cách thủy'], stop:['掀蓋！','Mở nắp!'], motion:'pulse', icon:'♨' }
+  wok:     { name:['炒鍋','Chảo xào'],  verb:['大火快炒','Xào lửa lớn'], stop:['翻炒！','Đảo!'], game:'mash', icon:'🔥' },
+  pan:     { name:['平底鍋','Chảo rán'], verb:['煎到金黃','Rán vàng'], stop:['翻面起鍋！','Lật & nhấc!'], game:'sweep', icon:'🍳' },
+  pot:     { name:['湯鍋','Nồi nấu'],   verb:['慢火熬煮','Ninh lửa nhỏ'], stop:['按住加火','Giữ để tăng lửa'], game:'hold', icon:'🍲' },
+  grill:   { name:['烤架','Vỉ nướng'],  verb:['炭火燒烤','Nướng than'], stop:['取下！','Gắp ra!'], game:'arrows', icon:'♨️' },
+  fryer:   { name:['油鍋','Nồi chiên'], verb:['熱油酥炸','Chiên ngập dầu'], stop:['撈起！','Vớt lên!'], game:'multi', icon:'🫕' },
+  steamer: { name:['蒸籠','Xửng hấp'],  verb:['大火蒸熟','Hấp cách thủy'], stop:['拍！','Nhịp!'], game:'rhythm', icon:'♨' }
 };
 const TOOL_TIERS = [ // RPG tiers: name, metal color, light color
   { name:['破舊','Cũ nát'],  c:'#6E6259', l:'#8C7F73' },
