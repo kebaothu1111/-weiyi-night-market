@@ -766,7 +766,9 @@ function renderNightUI(){
     h = `<div class="dlg frame"><div class="dbody"><p class="tier ${good ? 't1' : 't3'}">${esc(L(EV_OUT[o]))}</p>
       <div class="row" style="justify-content:flex-end"><button class="btn primary" data-act="evdone">${t('confirm')}</button></div></div></div>`;
   }
+  const had = layer.querySelector('.cook') ? '.cook' : layer.querySelector('.dlg') ? '.dlg' : '';
   layer.innerHTML = h; paintPortraits();
+  if (had) { const el = layer.querySelector(had); if (el) el.classList.add('noanim'); }
   N.cv = layer.querySelector('#cookcv'); if (N.cv) N.cv.getContext('2d').imageSmoothingEnabled = false;
   updateBars();
 }

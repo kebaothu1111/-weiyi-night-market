@@ -368,12 +368,12 @@ const ART = (() => {
   }
   function drawKitchen(g, st, t, lv) {
     const tools = st.tools || {};
-    // counter
-    R(g, 310, 196, 166, 4, '#a07a50'); R(g, 310, 196, 166, 1, '#c29a68'); R(g, 310, 200, 166, 24, '#5a4030');
-    for (let x = 316; x < 476; x += 22) R(g, x, 200, 1, 24, '#3d2a1e'); R(g, 310, 218, 166, 2, '#3d2a1e'); R(g, 310, 224, 166, 2, '#241a14');
     // hero
     const hero = (typeof SPECIAL !== 'undefined' && SPECIAL.hero) ? SPECIAL.hero.look : { skin: '#F1C9A5', hair: '#241C18', hs: 'short', top: '#2E6F8E', bot: '#2A2A3A', acc: ['apron'] };
     person(g, 405, 205, hero, { t, mood: null });
+    // counter (drawn after the hero so it hides the legs: the hero stands behind it)
+    R(g, 310, 196, 166, 4, '#a07a50'); R(g, 310, 196, 166, 1, '#c29a68'); R(g, 310, 200, 166, 24, '#5a4030');
+    for (let x = 316; x < 476; x += 22) R(g, x, 200, 1, 24, '#3d2a1e'); R(g, 310, 218, 166, 2, '#3d2a1e'); R(g, 310, 224, 166, 2, '#241a14');
     if (st.cooking) { const k = sin(t * 7) * 3, hx = 405 + 5, hy = 205 - 17; line(g, hx, hy, 430 + k, 192 - abs(k), 2, hero.top); R(g, 430 + k, 190 - abs(k), 3, 3, hero.skin); }
     // stove
     R(g, 424, 190, 50, 6, '#2a2a34'); R(g, 424, 190, 50, 1, '#555a6a'); R(g, 436, 187, 26, 3, '#15182B');
@@ -385,8 +385,8 @@ const ART = (() => {
     } else { R(g, 446, 185, 3, 2, '#E2574C'); R(g, 447, 184, 1, 1, '#F2A33A'); }
     // tool props
     ['wok', 'pan', 'pot', 'grill', 'fryer', 'steamer'].forEach((m, i) => {
-      const ic = iconCanvas(m, tools[m] || 1); g.imageSmoothingEnabled = true; g.drawImage(ic, 314 + i * 16, 182, 16, 16); g.imageSmoothingEnabled = false;
-      const c = TOOL_TIERS[(tools[m] || 1) - 1].l; R(g, 320 + i * 16, 197, 4, 1, c);
+      const ic = iconCanvas(m, tools[m] || 1); g.imageSmoothingEnabled = true; g.drawImage(ic, 313 + i * 13, 184, 13, 13); g.imageSmoothingEnabled = false; // keep clear of the hero at x≈399–411
+      const c = TOOL_TIERS[(tools[m] || 1) - 1].l; R(g, 318 + i * 13, 197, 3, 1, c);
     });
     // shutter / closed sign
     if (!st.open) {

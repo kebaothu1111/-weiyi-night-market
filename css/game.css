@@ -92,7 +92,7 @@ p{margin:0}
 .pat .bar i{display:block;height:100%;background:var(--jade)}
 
 /* cooking panel */
-.cook{position:absolute;left:50%;top:60px;transform:translateX(-50%);width:860px;height:404px;display:flex;flex-direction:column;gap:10px;padding:14px 16px;animation:rise .2s ease-out}
+.cook{position:absolute;left:50px;top:60px;width:860px;height:404px;display:flex;flex-direction:column;gap:10px;padding:14px 16px;animation:rise .2s ease-out}
 .chead{display:flex;align-items:center;gap:12px}
 .chead h3{font-size:22px}
 .chead .grow{flex:1}
@@ -251,3 +251,6 @@ button.chip.here:hover{background:var(--lantern);color:var(--ink)}
 .pcard.back{background:repeating-linear-gradient(45deg,#7A2B34 0 6px,#A4501A 6px 12px);color:var(--paper)}
 .casmsg{text-align:center;font-weight:800;font-size:18px;min-height:24px}
 .tabs .btn.on,.btn.small.on{background:var(--lantern);color:var(--ink);border-color:var(--lantern)}
+
+/* panels re-rendered in place keep still (no entrance animation replay) */
+.noanim{animation:none!important}
