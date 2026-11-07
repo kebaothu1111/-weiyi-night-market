@@ -1,0 +1,915 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="網頁小遊戲：在高雄港的月光夜市經營小吃攤，猜出客人的回憶、依序備料、抓準火候，點亮十五盞燈籠。">
+<style>:root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}body{margin:0}[hidden]{display:none!important}</style>
+<title>味憶夜市</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&family=Noto+Serif+TC:wght@700;900&family=VT323&display=swap">
+<style>
+/* Layout: one phone-width column; a HUD strip on top, a stage below that swaps phases (guess → prep → heat → result). Single dark night-market look by choice. */
+:root{
+  --night:#15182B; --night-2:#22263D; --night-3:#2E2A45; --line:#3A3F5C;
+  --paper:#F7EFE0; --muted:#B8B2C8; --lantern:#F2A33A; --lantern-deep:#A4501A;
+  --red:#E2574C; --jade:#4FC1B0; --ink:#15182B;
+  --display:'Noto Serif TC','Songti TC','PMingLiU',serif;
+  --body:'Noto Sans TC','PingFang TC','Microsoft JhengHei',sans-serif;
+  --pixel:'VT323',ui-monospace,'Courier New',monospace;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  background:
+    radial-gradient(circle at 86% 5%, rgba(247,239,224,.16) 0 34px, transparent 36px),
+    radial-gradient(ellipse at 50% -10%, #2E2A45 0%, var(--night) 62%);
+  background-color:var(--night);
+  color:var(--paper); font-family:var(--body); font-size:16px; line-height:1.55;
+  padding-left:max(16px, env(safe-area-inset-left, 0px));
+  padding-right:max(16px, env(safe-area-inset-right, 0px));
+  padding-block:0;
+  -webkit-tap-highlight-color:transparent;
+}
+#app{max-width:520px;margin:0 auto;height:100%;display:flex;flex-direction:column;min-height:0}
+h1,h2,h3{font-family:var(--display);text-wrap:balance;margin:0;line-height:1.2}
+p{margin:0}
+button{font:inherit;color:inherit}
+.screen{flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column;gap:14px;padding-block:14px 24px}
+.eyebrow{font-size:13px;letter-spacing:.18em;color:var(--lantern);font-weight:700}
+.muted{color:var(--muted)}
+.num{font-family:var(--pixel);font-size:22px;line-height:1;font-variant-numeric:tabular-nums}
+
+/* buttons */
+.btn{appearance:none;border:2px solid var(--line);background:var(--night-2);color:var(--paper);
+  font-weight:700;font-size:16px;padding:13px 16px;border-radius:12px;cursor:pointer;
+  box-shadow:0 4px 0 #0c0e1b;transition:transform .06s, box-shadow .06s;text-align:center}
+.btn:active{transform:translateY(3px);box-shadow:0 1px 0 #0c0e1b}
+.btn:focus-visible,.opt:focus-visible,.ing:focus-visible,.card:focus-visible{outline:3px solid var(--jade);outline-offset:2px}
+.btn.primary{background:var(--lantern);border-color:var(--lantern);color:var(--ink);box-shadow:0 4px 0 var(--lantern-deep)}
+.btn.primary:active{box-shadow:0 1px 0 var(--lantern-deep)}
+.btn.ghost{background:transparent;box-shadow:none}
+.btn.small{padding:8px 12px;font-size:14px;border-radius:10px}
+.btn[disabled]{opacity:.45;cursor:not-allowed}
+.row{display:flex;gap:10px;flex-wrap:wrap}
+.row > .btn{flex:1 1 140px}
+.badge{display:inline-block;min-width:20px;padding:0 6px;border-radius:99px;background:var(--red);color:var(--paper);font-size:12px;line-height:20px;margin-left:6px}
+
+/* lanterns */
+.lanterns{display:flex;gap:5px;flex-wrap:wrap;align-items:flex-start}
+.lan{width:13px;height:17px;border-radius:50% / 46%;background:var(--line);position:relative}
+.lan::before{content:"";position:absolute;left:50%;top:-5px;width:1px;height:5px;background:var(--line)}
+.lan.on{background:var(--lantern);box-shadow:0 0 10px rgba(242,163,58,.75)}
+.lanterns.big{display:grid;grid-template-columns:repeat(15,minmax(0,1fr));gap:5px;max-width:420px;width:100%}
+.lanterns.big .lan{width:100%;height:auto;aspect-ratio:3/4;max-width:24px}
+
+/* HUD */
+#hud{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;padding-top:10px}
+#hud[hidden]{display:none}
+.chip{background:var(--night-2);border:1px solid var(--line);border-radius:10px;padding:6px 8px;min-width:0}
+.chip .k{font-size:11px;color:var(--muted);letter-spacing:.06em;display:block;white-space:nowrap}
+.chip .v{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.meter{height:6px;background:var(--night-3);border-radius:4px;overflow:hidden;margin-top:4px}
+.meter i{display:block;height:100%;background:var(--jade)}
+.hudbar{grid-column:1/-1;display:flex;justify-content:space-between;align-items:center;gap:8px}
+.hudbar .eyebrow{white-space:nowrap;letter-spacing:.08em}
+.hudbar .lanterns{gap:3px;flex-wrap:nowrap;min-width:0;overflow:hidden}
+.hudbar .lanterns .lan{width:8px;height:11px;flex:none}
+.hudbar .lanterns .lan::before{display:none}
+.mute{background:var(--night-2);border:1px solid var(--line);border-radius:8px;padding:2px 8px;font-size:12px;color:var(--muted);cursor:pointer;white-space:nowrap;flex:none}
+
+/* title */
+.title-wrap{flex:1;display:flex;flex-direction:column;justify-content:center;gap:18px;padding-block:24px}
+.string{height:56px;position:relative}
+.string::before{content:"";position:absolute;left:-8px;right:-8px;top:8px;height:30px;border-bottom:1px solid var(--line);border-radius:0 0 50% 50%}
+.string .lan{position:absolute}
+.title-wrap h1{font-size:clamp(56px,17vw,88px);font-weight:900;letter-spacing:.04em}
+.title-wrap .sub{font-family:var(--display);font-size:24px}
+.credit{font-size:12px;color:var(--muted);text-align:center;padding-bottom:12px}
+
+/* panels & cards */
+.panel{background:var(--night-2);border:1px solid var(--line);border-radius:16px;padding:16px;display:flex;flex-direction:column;gap:10px}
+.panel.glow{border-color:var(--lantern);box-shadow:0 0 0 1px rgba(242,163,58,.25), 0 10px 30px rgba(0,0,0,.35)}
+.goal{font-size:14px;color:var(--muted)}
+.goal b{color:var(--paper)}
+.warn{color:var(--lantern);font-size:14px}
+
+/* story */
+.story{flex:1;display:flex;flex-direction:column;justify-content:flex-end;gap:16px;padding-block:24px}
+.story .scene-art{flex:1;display:flex;align-items:center;justify-content:center}
+.bubble{background:var(--paper);color:var(--ink);border-radius:16px;padding:16px 18px;font-size:17px;line-height:1.7;position:relative}
+.bubble .who{display:block;font-size:13px;font-weight:700;color:var(--lantern-deep);margin-bottom:4px}
+
+/* night stage */
+.queue{display:flex;justify-content:space-between;font-size:13px;color:var(--muted)}
+.scene{display:flex;gap:12px;align-items:flex-end}
+.scene .av{flex:none;text-align:center;font-size:12px;color:var(--muted)}
+.scene .bubble{flex:1;min-width:0;font-size:16px}
+.bubble.say::after{content:"";position:absolute;left:-8px;bottom:22px;border:8px solid transparent;border-right-color:var(--paper);border-left:0}
+.pat{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted)}
+.pat .bar{flex:1;height:10px;background:var(--night-3);border-radius:6px;overflow:hidden}
+.pat .bar i{display:block;height:100%;width:100%;background:var(--jade);transition:background .3s}
+.phase-title{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+.phase-title h3{font-size:20px}
+.hint{font-size:13px;color:var(--muted)}
+.opts{display:grid;gap:10px}
+.opt{display:flex;align-items:center;gap:12px;padding:12px 14px;border-radius:12px;border:2px solid var(--line);background:var(--night-3);cursor:pointer;text-align:left;font-weight:700;font-size:17px}
+.opt .e{font-size:28px;line-height:1}
+.opt small{display:block;font-weight:400;font-size:12px;color:var(--muted)}
+.opt.no{opacity:.35;pointer-events:none;text-decoration:line-through}
+.slots{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+.slot{height:46px;border:2px dashed var(--line);border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:22px}
+.slot.done{border-style:solid;border-color:var(--jade);background:rgba(79,193,176,.12)}
+.ings{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+.ing{display:flex;flex-direction:column;align-items:center;gap:2px;padding:10px 4px;border-radius:12px;border:2px solid var(--line);background:var(--night-3);cursor:pointer;font-size:13px;line-height:1.3;min-width:0}
+.ing .e{font-size:26px;line-height:1.1}
+.ing.used{opacity:.3;pointer-events:none}
+.ing.glow{border-color:var(--lantern);box-shadow:0 0 12px rgba(242,163,58,.6)}
+.shake{animation:shake .3s}
+@keyframes shake{25%{transform:translateX(-5px)}75%{transform:translateX(5px)}}
+.timer{height:6px;background:var(--night-3);border-radius:4px;overflow:hidden}
+.timer i{display:block;height:100%;width:100%;background:var(--lantern)}
+.heat{position:relative;height:56px;border-radius:12px;background:var(--night-3);border:2px solid var(--line);overflow:hidden}
+.heat .zy{position:absolute;top:0;bottom:0;background:rgba(242,163,58,.35)}
+.heat .zg{position:absolute;top:0;bottom:0;background:var(--jade);display:flex;align-items:center;justify-content:center;color:var(--ink);font-size:12px;font-weight:700}
+.heat .ptr{position:absolute;top:0;bottom:0;width:6px;margin-left:-3px;background:var(--paper);box-shadow:0 0 10px rgba(247,239,224,.9)}
+.legend{display:flex;gap:14px;font-size:12px;color:var(--muted)}
+.legend span::before{content:"";display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:5px;vertical-align:-1px;background:var(--c)}
+.wok{font-size:56px;text-align:center;line-height:1}
+.score{display:grid;grid-template-columns:1fr auto;gap:4px 12px;font-size:15px}
+.score .num{text-align:right}
+.total{display:flex;justify-content:space-between;align-items:baseline;border-top:1px solid var(--line);padding-top:8px}
+.total .num{font-size:44px;color:var(--lantern)}
+.tier{font-family:var(--display);font-size:22px}
+.tier.t1{color:var(--jade)} .tier.t2{color:var(--lantern)} .tier.t3{color:var(--red)}
+
+/* modal */
+#modal{position:fixed;inset:0;background:rgba(10,11,22,.78);display:flex;align-items:flex-end;justify-content:center;z-index:20;
+  padding-left:max(12px, env(safe-area-inset-left, 0px));padding-right:max(12px, env(safe-area-inset-right, 0px));padding-top:max(12px, env(safe-area-inset-top, 0px))}
+#modal[hidden]{display:none}
+.sheet{width:100%;max-width:520px;max-height:100%;overflow-y:auto;background:var(--night);border:1px solid var(--line);border-bottom:0;border-radius:20px 20px 0 0;
+  padding:18px 16px calc(20px + env(safe-area-inset-bottom, 0px));display:flex;flex-direction:column;gap:12px}
+.sheet-head{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.sheet-head h2{font-size:22px}
+.list{display:flex;flex-direction:column;gap:8px}
+.item{display:flex;align-items:center;gap:10px;background:var(--night-2);border:1px solid var(--line);border-radius:12px;padding:10px 12px}
+.item .e{font-size:26px}
+.item .grow{flex:1;min-width:0}
+.item .grow b{display:block}
+.item .grow small{color:var(--muted);font-size:12px}
+.qty{display:flex;align-items:center;gap:6px}
+.qty .num{min-width:22px;text-align:center}
+.qty button{width:32px;height:32px;border-radius:8px;border:1px solid var(--line);background:var(--night-3);cursor:pointer;font-weight:700}
+.stat{display:grid;grid-template-columns:auto 1fr auto;gap:4px 12px;align-items:center;background:var(--night-2);border:1px solid var(--line);border-radius:12px;padding:12px}
+.stat b{font-size:17px}
+.stat small{grid-column:1/3;color:var(--muted);font-size:13px}
+.pips{display:flex;gap:3px}
+.pips i{width:10px;height:10px;border-radius:2px;background:var(--line)}
+.pips i.on{background:var(--lantern)}
+.cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.card{border:1px solid var(--line);background:var(--night-2);border-radius:12px;padding:10px 6px;text-align:center;cursor:pointer;min-width:0;display:flex;flex-direction:column;align-items:center;gap:2px}
+.card .e{font-size:28px}
+.card b{font-size:13px;line-height:1.3}
+.card small{font-size:11px;color:var(--muted)}
+.card.lock{cursor:default}
+.card.lock .e{filter:grayscale(1) brightness(.5)}
+.card.done{border-color:var(--lantern)}
+.recipe{background:var(--night-2);border:2px solid var(--lantern);border-radius:18px;padding:18px;display:flex;flex-direction:column;gap:10px;box-shadow:0 10px 40px rgba(242,163,58,.18)}
+.recipe h3{font-size:26px}
+.recipe .quote{font-size:16px;line-height:1.75}
+.recipe .fact{font-size:13px;color:var(--muted);border-top:1px solid var(--line);padding-top:10px}
+textarea{width:100%;min-height:110px;background:var(--night-2);color:var(--paper);border:1px solid var(--line);border-radius:10px;padding:10px;font-family:ui-monospace,monospace;font-size:12px;resize:vertical}
+#toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(18px + env(safe-area-inset-bottom, 0px));background:var(--paper);color:var(--ink);padding:10px 16px;border-radius:12px;font-weight:700;font-size:14px;z-index:30;box-shadow:0 8px 24px rgba(0,0,0,.4);max-width:calc(100% - 32px);text-align:center}
+#toast[hidden]{display:none}
+@media (prefers-reduced-motion: reduce){ .shake{animation:none} .btn{transition:none} }
+</style>
+</head>
+<body>
+
+<div id="app">
+  <div id="hud" hidden></div>
+  <main id="screen" class="screen" aria-live="polite"></main>
+</div>
+<div id="modal" hidden role="dialog" aria-modal="true"><div class="sheet" id="sheet"></div></div>
+<div id="toast" hidden role="status"></div>
+
+<script>
+/* ---------- data ---------- */
+const ZONES = [
+  { name:'古早味街', cuisine:'台灣小吃' },
+  { name:'南洋巷',   cuisine:'越南料理' },
+  { name:'千島角',   cuisine:'印尼・菲律賓料理' },
+  { name:'湄南河攤', cuisine:'泰國料理' },
+  { name:'燈塔碼頭', cuisine:'月嬤的原創融合料理' }
+];
+const ING = {
+  '豬絞肉':'🥩','紅蔥頭':'🧅','醬油':'🫙','白飯':'🍚','魚骨高湯':'🍲','虱目魚肚':'🐟','薑絲':'🫚',
+  '蚵仔':'🦪','地瓜粉漿':'🥣','雞蛋':'🥚','甜辣醬':'🥫','河粉':'🍜','生牛肉片':'🐄','牛骨高湯':'🦴',
+  '九層塔':'🌿','法國麵包':'🥖','肝醬':'🫕','越式火腿':'🍖','醃紅白蘿蔔':'🥕','冬粉木耳':'🍄','米紙':'⚪',
+  '熱油':'🛢️','雞肉':'🍗','薑黃醃料':'🟡','竹籤':'🥢','花生醬':'🥜','香料泥':'🌶️','牛肉塊':'🍖',
+  '椰奶':'🥥','烤椰絲':'🍂','蒜頭':'🧄','醋':'🍶','魚露':'🫗','打拋葉':'☘️','綠咖哩醬':'🟢',
+  '泰國小茄子':'🍆','糯米':'🍙','芒果':'🥭','脆綠豆':'🫘','溫體牛肉':'🐂','香茅':'🌾'
+};
+const DISHES = [
+  { name:'肉燥飯', emoji:'🍚', zone:0, steps:['豬絞肉','紅蔥頭','醬油','白飯'], who:'阿土伯',
+    memory:'放學回家，巷口那碗淋得油亮亮的飯，旁邊總有一片黃色醃蘿蔔。',
+    story:'阿土伯想起來了：那是媽媽在巷口擺的攤。每天放學，他都蹲在攤子旁邊，等那一碗熱騰騰的飯。',
+    fact:'肉燥用豬肉、醬油和紅蔥頭慢火滷製，是台灣最常見的小吃之一。' },
+  { name:'虱目魚粥', emoji:'🥣', zone:0, steps:['魚骨高湯','白飯','虱目魚肚','薑絲'], who:'秀琴姨',
+    memory:'台南的清晨，攤子還冒著白煙，阿公說魚肚要趁熱吃。',
+    story:'秀琴姨想起，阿公每天清晨牽著她去吃魚粥，總說最嫩的魚肚要留給孫女。',
+    fact:'虱目魚是台南代表性的養殖魚，魚肚粥是當地常見的早餐。' },
+  { name:'蚵仔煎', emoji:'🍳', zone:0, steps:['蚵仔','地瓜粉漿','雞蛋','甜辣醬'], who:'小凱',
+    memory:'第一次逛夜市，鐵板上滋滋作響，粉漿邊緣煎得脆脆的。',
+    story:'小凱想起，那天爸爸把最大顆的蚵仔都夾給他，自己只吃粉漿。',
+    fact:'粉漿多用地瓜粉調成，煎好後淋上甜甜辣辣的紅色醬汁。' },
+  { name:'牛肉河粉 Phở', emoji:'🍜', zone:1, steps:['河粉','生牛肉片','牛骨高湯','九層塔'], who:'阿明伯',
+    memory:'下雨的西貢清晨，媽媽在巷口煮的那鍋湯。',
+    story:'阿明伯想起，媽媽總在湯裡多放一把香草，說這樣下雨天就不會感冒。',
+    fact:'湯頭用牛骨長時間熬煮，加入八角、肉桂等香料；滾燙的湯會把生牛肉片燙熟。' },
+  { name:'越南法國麵包', emoji:'🥖', zone:1, steps:['法國麵包','肝醬','越式火腿','醃紅白蘿蔔'], who:'小芳',
+    memory:'騎機車趕去上學前，在路邊買一份，脆皮屑掉滿身。',
+    story:'小芳想起，賣麵包的阿姨總會偷偷多塞一片火腿給她，說讀書要吃飽。',
+    fact:'源自法國殖民時期的長棍麵包，越南人加入肝醬、火腿和醃紅白蘿蔔絲。' },
+  { name:'越南炸春捲', emoji:'🥟', zone:1, steps:['豬絞肉','冬粉木耳','米紙','熱油'], who:'阿蓮姨',
+    memory:'過年全家圍在一起捲春捲，外婆總說捲太鬆會炸開。',
+    story:'阿蓮姨想起，外婆捲的春捲總是最緊，炸好的第一條一定先拿去拜祖先。',
+    fact:'越南炸春捲用米紙包豬肉、冬粉、木耳等內餡，炸到金黃，沾魚露調的醬汁吃。' },
+  { name:'沙嗲串燒', emoji:'🍢', zone:2, steps:['雞肉','薑黃醃料','竹籤','花生醬'], who:'布迪',
+    memory:'爪哇的夜市，炭火的煙裡全是花生醬的香味。',
+    story:'布迪想起，爸爸在家鄉擺沙嗲攤，他從小就在旁邊幫忙搧炭火。',
+    fact:'沙嗲是印尼常見的炭烤肉串，通常搭配花生醬汁一起吃。' },
+  { name:'巴東牛肉', emoji:'🍛', zone:2, steps:['香料泥','牛肉塊','椰奶','烤椰絲'], who:'西蒂',
+    memory:'開齋節那天，媽媽從早燉到晚，整間屋子都是椰奶香。',
+    story:'西蒂想起，開齋節全家人都會回到媽媽家，那鍋牛肉要燉一整天才上桌。',
+    fact:'源自印尼蘇門答臘的米南佳保族，牛肉用椰奶和香料慢燉好幾個小時。' },
+  { name:'菲式阿多波', emoji:'🍲', zone:2, steps:['蒜頭','雞肉','醬油','醋'], who:'喬伊',
+    memory:'馬尼拉的雨季，奶奶說加了醋的菜放到明天會更好吃。',
+    story:'喬伊想起，奶奶的阿多波總是隔天最入味，她每次都偷偷留一碗當早餐。',
+    fact:'用醋、醬油、蒜頭和月桂葉燉煮，常被稱為菲律賓的國民料理之一。' },
+  { name:'打拋豬', emoji:'🌶️', zone:3, steps:['蒜頭','豬絞肉','魚露','打拋葉'], who:'娜娜',
+    memory:'曼谷巷子裡的大火快炒，老闆說一定要配一顆煎蛋。',
+    story:'娜娜想起，那是她第一次一個人出門吃飯，老闆笑著多送了她一顆蛋。',
+    fact:'「打拋」是泰文聖羅勒（kaphrao）的音譯，台灣常用九層塔代替。' },
+  { name:'綠咖哩', emoji:'🥘', zone:3, steps:['綠咖哩醬','椰奶','雞肉','泰國小茄子'], who:'頌猜',
+    memory:'清邁的廚房裡，媽媽一邊搗香料，一邊教我分辨辣椒。',
+    story:'頌猜想起，媽媽說綠辣椒比紅辣椒更嗆，要他搗完香料千萬別揉眼睛。',
+    fact:'綠咖哩的綠色來自青辣椒和香草，是泰國很有代表性的咖哩。' },
+  { name:'芒果糯米', emoji:'🥭', zone:3, steps:['糯米','椰奶','芒果','脆綠豆'], who:'帕恩',
+    memory:'潑水節的午後全身濕透，奶奶遞來一盤冰涼的甜點。',
+    story:'帕恩想起，奶奶家院子裡有一棵芒果樹，每年四月都結滿果實。',
+    fact:'糯米蒸熟後拌入甜椰奶，配上熟芒果，是泰國夏天最受歡迎的甜點之一。' },
+  { name:'月嬤牛肉河粉', emoji:'🍜', zone:4, steps:['牛骨高湯','河粉','溫體牛肉','薑絲'], who:'穿舊夾克的老船員',
+    memory:'西貢港的夜裡，有個女孩請我喝了一碗河粉。後來，我把她帶回了高雄。',
+    story:'老船員笑了：「那個女孩，就是你的外婆。」原來他是小燈從沒見過的外公。',
+    fact:'月嬤的原創料理：台南牛肉湯的溫體牛肉，配上越南河粉的香料湯頭。' },
+  { name:'蚵仔煎春捲', emoji:'🌯', zone:4, steps:['蚵仔','雞蛋','米紙','甜辣醬'], who:'戴斗笠的女孩',
+    memory:'剛到高雄的第一個夏天，我很想家，就把夜市的蚵仔煎包進春捲皮。',
+    story:'女孩的臉，和老照片裡年輕的月嬤一模一樣。她輕聲說：「謝謝你，還記得我的味道。」',
+    fact:'月嬤的原創料理：把蚵仔煎的蚵仔和蛋包進米紙，沾甜辣醬吃。' },
+  { name:'香茅肉燥飯', emoji:'🍚', zone:4, steps:['香茅','豬絞肉','魚露','白飯'], who:'放學的小女孩',
+    memory:'放學回家，媽媽的飯裡總有一股香茅味，同學都說好香。',
+    story:'小女孩跑開前回頭喊了一聲「媽媽」。那是小時候的媽媽，月嬤的女兒。',
+    fact:'月嬤的原創料理：在肉燥裡加入香茅和魚露，是台越家庭的家常味。' }
+];
+const STATS = {
+  knife:  { name:'刀工',     desc:'備料時間變長，比較不會手忙腳亂。' },
+  heat:   { name:'火候',     desc:'火候判定的綠區變寬，更容易「完美」。' },
+  memory: { name:'味覺記憶', desc:'猜菜和備料時出現更多提示。' },
+  charm:  { name:'人情',     desc:'客人更有耐心，完美上菜時小費更多。' }
+};
+const UPGRADES = {
+  wok:    { name:'祖傳鐵鍋',   price:350, desc:'火候綠區再寬 3%' },
+  sign:   { name:'霓虹新招牌', price:450, desc:'每晚多 1 位客人' },
+  fridge: { name:'保鮮冰箱',   price:300, desc:'食材多放 1 夜才會壞' }
+};
+const INTRO = [
+  { who:'', text:'高雄港，舊碼頭。每逢農曆十五的午夜，這裡會出現一座只營業到天亮的夜市。' },
+  { who:'', text:'來這裡的客人，都是離鄉太久、忘了家鄉味道的「失味旅人」。' },
+  { who:'月嬤', text:'小燈，外婆住院這陣子，「月嬤的灶腳」就交給你了。' },
+  { who:'月嬤', text:'客人不會直接點菜，只會說一段回憶。你要猜出是哪道菜，照順序備料，再抓準火候。' },
+  { who:'月嬤', text:'做對了那一口，他們就會想起來。夜市的燈籠，也會一盞一盞亮回來。' }
+];
+const ENDING = [
+  { who:'', text:'十五盞燈籠全亮了。月光夜市，從來沒有這麼熱鬧過。' },
+  { who:'', text:'人群裡，一個熟悉的身影慢慢走來。是出院的月嬤。' },
+  { who:'月嬤', text:'三十年前，我在西貢港遇到一個從高雄來的船員。他說，高雄的港口晚上也看得到月亮。' },
+  { who:'月嬤', text:'我跟著他來到這裡，把家鄉的河粉，煮成了台南牛肉湯的樣子。那就是我的招牌湯。' },
+  { who:'月嬤', text:'小燈，味道會被忘記。可是只要有人繼續煮，回憶就不會消失。' }
+];
+
+/* ---------- helpers ---------- */
+const $ = s => document.querySelector(s);
+const clamp = (v,a,b) => Math.max(a, Math.min(b, v));
+const rnd = n => Math.floor(Math.random()*n);
+const shuffle = a => { a = a.slice(); for (let i=a.length-1;i>0;i--){ const j=rnd(i+1); [a[i],a[j]]=[a[j],a[i]]; } return a; };
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+/* ---------- state & save ---------- */
+const SAVE_KEY = 'weiyi-night-market-v1';
+let S = null;      // saved state
+let N = null;      // tonight's runtime (not saved)
+let muted = false;
+
+function newState(){
+  return { v:1, night:1, zone:0, zoneNights:0, lv:1, exp:0, points:0,
+    stats:{ knife:1, heat:1, memory:1, charm:1 }, stamina:100, money:300, rep:2,
+    frags:Array(15).fill(0), stock:{}, upgrades:{ wok:false, sign:false, fridge:false }, ended:false, served:0 };
+}
+function valid(o){
+  try{
+    return !!o && o.v===1 &&
+      ['night','zone','zoneNights','lv','exp','points','stamina','money','rep','served'].every(k => Number.isFinite(o[k])) &&
+      o.zone>=0 && o.zone<=4 && o.night>=1 && o.lv>=1 &&
+      o.stats && ['knife','heat','memory','charm'].every(k => Number.isFinite(o.stats[k]) && o.stats[k]>=1 && o.stats[k]<=10) &&
+      Array.isArray(o.frags) && o.frags.length===15 && o.frags.every(f => Number.isFinite(f) && f>=0 && f<=3) &&
+      o.stock && typeof o.stock==='object' && Object.values(o.stock).every(a => Array.isArray(a) && a.every(Number.isFinite)) &&
+      o.upgrades && typeof o.upgrades==='object';
+  }catch(e){ return false; }
+}
+function save(){ try{ localStorage.setItem(SAVE_KEY, JSON.stringify(S)); }catch(e){} }
+function loadSave(){ try{ const r = localStorage.getItem(SAVE_KEY); if(!r) return null; const o = JSON.parse(r); return valid(o) ? o : null; }catch(e){ return null; } }
+
+/* ---------- derived rules ---------- */
+const expNeed = lv => 80 + 40*(lv-1);
+const patienceMax = () => 25 + S.stats.charm*3;
+const prepMax = () => 8 + S.stats.knife*1.5;
+const greenW = () => 12 + S.stats.heat*2 + (S.upgrades.wok?3:0);
+const freshNights = () => 2 + (S.upgrades.fridge?1:0);
+const customersTonight = () => 3 + Math.floor(S.rep) + (S.upgrades.sign?1:0);
+const dishPrice = i => 90 + DISHES[i].zone*20;
+const bundleCost = i => 30 + DISHES[i].zone*10;
+const unlocked = () => DISHES.map((d,i)=>i).filter(i => DISHES[i].zone <= S.zone);
+const stockOf = i => (S.stock[i] || []).length;
+const totalStock = () => unlocked().reduce((n,i)=>n+stockOf(i),0);
+const cardsDone = () => S.frags.filter(f => f>=3).length;
+const zoneFrags = z => DISHES.map((d,i)=>i).filter(i=>DISHES[i].zone===z).reduce((n,i)=>n+S.frags[i],0);
+const zoneDone = z => DISHES.every((d,i) => d.zone!==z || S.frags[i]>=3);
+const stars = r => '★'.repeat(Math.floor(r)) + '☆'.repeat(5-Math.floor(r));
+
+/* ---------- audio (Web Audio API, synthesized) ---------- */
+let AC = null;
+function ac(){
+  if (muted) return null;
+  try{
+    if (!AC) AC = new (window.AudioContext || window.webkitAudioContext)();
+    if (AC.state === 'suspended') AC.resume();
+  }catch(e){ AC = null; }
+  return AC;
+}
+function tone(f, d, type='sine', vol=.12, when=0){
+  const a = ac(); if (!a) return;
+  const o = a.createOscillator(), g = a.createGain(), t = a.currentTime + when;
+  o.type = type; o.frequency.setValueAtTime(f, t);
+  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(.001, t+d);
+  o.connect(g).connect(a.destination); o.start(t); o.stop(t+d+.05);
+}
+function sizzle(d=.7, vol=.09){
+  const a = ac(); if (!a) return;
+  const len = Math.floor(a.sampleRate*d), buf = a.createBuffer(1, len, a.sampleRate), ch = buf.getChannelData(0);
+  for (let i=0;i<len;i++) ch[i] = (Math.random()*2-1) * (Math.random()<.04 ? 1 : .35);
+  const src = a.createBufferSource(), hp = a.createBiquadFilter(), g = a.createGain(), t = a.currentTime;
+  hp.type = 'highpass'; hp.frequency.value = 2400; src.buffer = buf;
+  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(.001, t+d);
+  src.connect(hp).connect(g).connect(a.destination); src.start(t);
+}
+const sfx = {
+  tap:  () => tone(700, .07, 'square', .05),
+  ok:   () => { tone(523,.12,'triangle'); tone(784,.18,'triangle',.12,.09); },
+  bad:  () => tone(150, .25, 'sawtooth', .07),
+  perfect: () => [523,659,784,1047].forEach((f,i)=>tone(f,.22,'triangle',.11,i*.08)),
+  lantern: () => [784,988,1175,1568].forEach((f,i)=>tone(f,.4,'sine',.09,i*.12)),
+  sizzle
+};
+
+/* ---------- UI plumbing ---------- */
+const screen = () => $('#screen');
+let toastTimer = 0;
+function toast(msg){
+  const t = $('#toast'); t.textContent = msg; t.hidden = false;
+  clearTimeout(toastTimer); toastTimer = setTimeout(()=>{ t.hidden = true; }, 2200);
+}
+let modalOnClose = null;
+function openModal(html, onClose){
+  $('#sheet').innerHTML = html; $('#modal').hidden = false; modalOnClose = onClose || null;
+  const f = $('#sheet').querySelector('button'); if (f) f.focus({preventScroll:true});
+}
+function closeModal(){
+  $('#modal').hidden = true; $('#sheet').innerHTML = '';
+  const cb = modalOnClose; modalOnClose = null; if (cb) cb();
+}
+function lanternRow(n, cls=''){
+  let h = `<div class="lanterns ${cls}" aria-label="已點亮 ${n} / 15 盞燈籠">`;
+  for (let i=0;i<15;i++) h += `<span class="lan ${i<n?'on':''}"></span>`;
+  return h + '</div>';
+}
+function renderHud(){
+  const hud = $('#hud');
+  if (!S || !['hub','night','summary'].includes(view)) { hud.hidden = true; return; }
+  hud.hidden = false;
+  const need = expNeed(S.lv);
+  hud.innerHTML = `
+    <div class="hudbar"><span class="eyebrow">第 ${S.night} 夜・${ZONES[S.zone].name}</span>${lanternRow(cardsDone())}
+      <button class="mute" data-act="mute" aria-pressed="${muted}">${muted?'音效 關':'音效 開'}</button></div>
+    <div class="chip"><span class="k">體力</span><span class="v num">${Math.round(S.stamina)}</span><div class="meter"><i style="width:${S.stamina}%"></i></div></div>
+    <div class="chip"><span class="k">新台幣</span><span class="v num">$${S.money}</span></div>
+    <div class="chip"><span class="k">口碑 ${S.rep.toFixed(1)}</span><span class="v" style="color:var(--lantern);font-size:12px;letter-spacing:-1px">${stars(S.rep)}</span></div>
+    <div class="chip"><span class="k">Lv ${S.lv}${S.points?` <span style="color:var(--lantern)">+${S.points}</span>`:''}</span><span class="v num" style="font-size:16px">${S.exp}/${need}</span><div class="meter"><i style="width:${clamp(S.exp/need*100,0,100)}%;background:var(--lantern)"></i></div></div>`;
+}
+let view = 'title';
+function go(v){ view = v; renderHud(); screen().scrollTop = 0; }
+
+/* ---------- title ---------- */
+function showTitle(){
+  go('title');
+  const has = !!loadSave();
+  let lans = '';
+  [[4,10,'on'],[17,22,''],[30,16,'on'],[44,26,'on'],[58,18,''],[71,24,'on'],[85,12,'on']].forEach(([x,y,c]) =>
+    lans += `<span class="lan ${c}" style="left:${x}%;top:${y}px;width:20px;height:26px"></span>`);
+  screen().innerHTML = `
+    <div class="title-wrap">
+      <div class="string" aria-hidden="true">${lans}</div>
+      <p class="eyebrow">高雄港・農曆十五・午夜營業</p>
+      <h1>味憶夜市</h1>
+      <p class="sub">港都深夜食堂</p>
+      <p class="muted">一碗湯，喚回一段被遺忘的家鄉。猜出客人的回憶、照順序備料、抓準火候，把夜市的十五盞燈籠重新點亮。</p>
+      <div class="list" style="margin-top:8px">
+        ${has ? `<button class="btn primary" data-act="continue">繼續營業</button>` : ''}
+        <button class="btn ${has?'':'primary'}" data-act="newgame">${has?'重新開始':'開始遊戲'}</button>
+        <button class="btn ghost" data-act="saves">匯入存檔</button>
+      </div>
+    </div>
+    <p class="credit">生成式AI應用 期中專題・阮庭陽</p>`;
+}
+
+/* ---------- story panels ---------- */
+function showStory(panels, done){
+  go('story');
+  let i = 0;
+  const draw = () => {
+    const p = panels[i];
+    screen().innerHTML = `
+      <div class="story">
+        <div class="scene-art">${p.who==='月嬤' ? `<div style="text-align:center">${avatar(-1)}<p class="muted" style="font-size:13px">月嬤</p></div>` : lanternRow(Math.min(15, i*3+ (panels===ENDING?15:2)), 'big')}</div>
+        <div class="bubble">${p.who?`<span class="who">${esc(p.who)}</span>`:''}${esc(p.text)}</div>
+        <div class="row"><button class="btn ghost" data-act="skip">略過</button><button class="btn primary" data-act="next">${i<panels.length-1?'下一句':'開始'}</button></div>
+        <p class="hint" style="text-align:center">${i+1} / ${panels.length}</p>
+      </div>`;
+  };
+  storyNext = () => { sfx.tap(); if (++i >= panels.length) done(); else draw(); };
+  storySkip = () => done();
+  draw();
+}
+let storyNext = null, storySkip = null;
+
+/* ---------- avatars ---------- */
+function avatar(i){
+  const d = DISHES[i];
+  const old = !d || /伯|姨|老|阿土/.test(d.who);
+  const hair = old ? '#9B98A6' : ['#2B2420','#4A3426','#1C1C28','#3A2A1E','#5B3A29'][Math.abs(i)%5];
+  const shirt = i<0 ? '#C0504A' : ['#4FC1B0','#E2574C','#7C8BD6','#C98BB9','#E8C547','#6FA36B','#D98E48'][i%7];
+  const skin = ['#F1C9A5','#D9A57C','#B8865B','#E8B98F'][Math.abs(i)%4];
+  const hat = d && d.who.includes('斗笠') ? `<path d="M18 40 L60 12 L102 40 Z" fill="#D8B46A"/>` : '';
+  const bun = i<0 ? `<circle cx="60" cy="22" r="11" fill="${hair}"/>` : '';
+  return `<svg viewBox="0 0 120 140" width="96" height="112" aria-hidden="true">
+    <rect x="22" y="90" width="76" height="50" rx="18" fill="${shirt}"/>
+    ${bun}<circle cx="60" cy="58" r="30" fill="${skin}"/>
+    <path d="M30 54 Q32 24 60 24 Q88 24 90 54 Q80 40 60 40 Q40 40 30 54Z" fill="${hair}"/>${hat}
+    <circle cx="49" cy="62" r="3.2" fill="#1E1B2E"/><circle cx="71" cy="62" r="3.2" fill="#1E1B2E"/>
+    <path d="M52 74 Q60 79 68 74" stroke="#1E1B2E" stroke-width="2.5" fill="none" stroke-linecap="round"/></svg>`;
+}
+
+/* ---------- hub ---------- */
+function showHub(){
+  go('hub');
+  const z = S.zone, count = customersTonight(), stock = totalStock();
+  const goal = z < 4
+    ? `開放下一區：口碑 <b>${S.rep.toFixed(1)}</b>/3 ・本區回憶碎片 <b>${zoneFrags(z)}</b>/9 ・本區已營業 <b>${Math.min(S.zoneNights,3)}</b>/3 夜`
+    : `集滿 15 張料理卡，迎接結局。目前 <b>${cardsDone()}</b>/15`;
+  screen().innerHTML = `
+    <div class="panel glow">
+      <p class="eyebrow">第 ${S.night} 夜・${ZONES[z].cuisine}</p>
+      <h2 style="font-size:30px">${ZONES[z].name}</h2>
+      ${lanternRow(cardsDone(), 'big')}
+      <p class="goal">${goal}</p>
+    </div>
+    <div class="panel">
+      <p>今晚預計客人 <b class="num">${count}</b> 位　食材庫存 <b class="num">${stock}</b> 份</p>
+      ${stock < count ? `<p class="warn">食材不夠招待所有客人，先去早市補貨吧。</p>` : `<p class="hint">食材放超過 ${freshNights()} 夜會壞掉，別一次買太多。</p>`}
+    </div>
+    <div class="row">
+      <button class="btn" data-act="market">早市採購</button>
+      <button class="btn" data-act="stats">攤主能力${S.points?`<span class="badge">${S.points}</span>`:''}</button>
+      <button class="btn" data-act="album">回憶圖鑑</button>
+      <button class="btn" data-act="saves">存檔備份</button>
+    </div>
+    <button class="btn primary" data-act="open" style="font-size:19px;padding:16px">開攤營業</button>
+    ${S.ended ? `<p class="hint" style="text-align:center">你已經看過結局了，夜市會繼續營業。</p>` : ''}`;
+}
+
+/* ---------- market ---------- */
+let cart = {};
+function showMarket(){
+  const rows = unlocked().map(i => {
+    const d = DISHES[i], arr = S.stock[i] || [], q = cart[i] || 0;
+    const oldest = arr.length ? freshNights() - (S.night - Math.min(...arr)) : 0;
+    return `<div class="item"><span class="e">${d.emoji}</span>
+      <div class="grow"><b>${esc(d.name)} 食材包</b><small>$${bundleCost(i)}／份・庫存 ${arr.length}${arr.length?`（最舊的還能放 ${oldest} 夜）`:''}</small></div>
+      <div class="qty"><button data-act="cart" data-i="${i}" data-d="-1" aria-label="少買一份">−</button><span class="num">${q}</span><button data-act="cart" data-i="${i}" data-d="1" aria-label="多買一份">＋</button></div></div>`;
+  }).join('');
+  const total = Object.entries(cart).reduce((n,[i,q]) => n + bundleCost(+i)*q, 0);
+  const ups = Object.entries(UPGRADES).map(([k,u]) => `<div class="item"><div class="grow"><b>${u.name}</b><small>${u.desc}</small></div>
+    ${S.upgrades[k] ? `<span class="hint">已擁有</span>` : `<button class="btn small" data-act="upgrade" data-k="${k}" ${S.money<u.price?'disabled':''}>$${u.price}</button>`}</div>`).join('');
+  openModal(`
+    <div class="sheet-head"><h2>早市採購</h2><button class="btn small ghost" data-act="close">關閉</button></div>
+    <p class="hint">一份食材包可以做一道菜。手上有 <b class="num">$${S.money}</b></p>
+    <div class="list">${rows}</div>
+    <div class="row"><button class="btn ghost" data-act="cartfill">補到今晚客人數</button>
+      <button class="btn primary" data-act="buy" ${total===0||total>S.money?'disabled':''}>買下（$${total}）</button></div>
+    ${total>S.money?`<p class="warn">錢不夠，少買一點。</p>`:''}
+    <h3 style="font-size:18px;margin-top:6px">攤具升級</h3>
+    <div class="list">${ups}</div>`);
+}
+
+/* ---------- stats ---------- */
+function showStats(){
+  const rows = Object.entries(STATS).map(([k,s]) => {
+    let pips = ''; for (let j=1;j<=10;j++) pips += `<i class="${j<=S.stats[k]?'on':''}"></i>`;
+    return `<div class="stat"><b>${s.name} <span class="num" style="font-size:20px">${S.stats[k]}</span></b><div class="pips" aria-hidden="true">${pips}</div>
+      <button class="btn small" data-act="addstat" data-k="${k}" ${S.points<1||S.stats[k]>=10?'disabled':''} aria-label="${s.name}加一點">＋1</button>
+      <small>${s.desc}</small></div>`;
+  }).join('');
+  openModal(`
+    <div class="sheet-head"><h2>攤主能力</h2><button class="btn small ghost" data-act="close">關閉</button></div>
+    <p class="hint">等級 ${S.lv}・可分配能力點 <b class="num" style="color:var(--lantern)">${S.points}</b>（每升一級得到 2 點）</p>
+    <div class="list">${rows}</div>
+    <p class="hint">耐心上限 ${patienceMax()} 秒・備料時間 ${prepMax().toFixed(1)} 秒・火候綠區 ${greenW()}%</p>`);
+}
+
+/* ---------- album ---------- */
+function showAlbum(){
+  const cards = DISHES.map((d,i) => {
+    const f = S.frags[i], done = f>=3, seen = d.zone <= S.zone;
+    return `<button class="card ${done?'done':'lock'}" ${done?`data-act="card" data-i="${i}"`:'disabled'}>
+      <span class="e">${seen?d.emoji:'？'}</span><b>${seen?esc(d.name):'？？？'}</b><small>${done?'已解鎖':`回憶碎片 ${f}/3`}</small></button>`;
+  }).join('');
+  openModal(`
+    <div class="sheet-head"><h2>回憶圖鑑 ${cardsDone()}/15</h2><button class="btn small ghost" data-act="close">關閉</button></div>
+    <p class="hint">完美上菜（80 分以上）會得到回憶碎片，集滿 3 片解鎖料理卡。</p>
+    <div class="cards">${cards}</div>`);
+}
+function recipeCard(i){
+  const d = DISHES[i];
+  return `<div class="recipe">
+    <p class="eyebrow">料理卡 No.${String(i+1).padStart(2,'0')}・${ZONES[d.zone].cuisine}</p>
+    <h3>${d.emoji} ${esc(d.name)}</h3>
+    <p class="hint">客人：${esc(d.who)}</p>
+    <p class="quote">「${esc(d.memory)}」</p>
+    <p class="quote">${esc(d.story)}</p>
+    <p class="hint">食材順序：${d.steps.map(esc).join(' → ')}</p>
+    <p class="fact">小知識：${esc(d.fact)}</p></div>`;
+}
+
+/* ---------- save / backup ---------- */
+function showSaves(msg=''){
+  const data = S ? JSON.stringify(S) : '';
+  openModal(`
+    <div class="sheet-head"><h2>存檔備份</h2><button class="btn small ghost" data-act="close">關閉</button></div>
+    <p class="hint">每晚收攤會自動存在這個瀏覽器裡。想換手機或電腦繼續玩，就把下面的存檔碼複製起來，到新裝置貼上讀取。</p>
+    ${S ? `<label class="hint" for="exportBox">目前的存檔碼</label>
+    <textarea id="exportBox" readonly>${esc(data)}</textarea>
+    <button class="btn" data-act="copy">複製存檔碼</button>` : ''}
+    <label class="hint" for="importBox">貼上存檔碼，或選擇 .json 備份檔</label>
+    <textarea id="importBox" placeholder='{"v":1, ...}'></textarea>
+    <input id="importFile" type="file" accept=".json,application/json,text/plain" class="hint">
+    <button class="btn primary" data-act="import">讀取存檔</button>
+    <p id="saveMsg" class="warn" role="status">${esc(msg)}</p>`);
+  const f = $('#importFile');
+  if (f) f.addEventListener('change', () => {
+    const file = f.files && f.files[0]; if (!file) return;
+    const r = new FileReader(); r.onload = () => { $('#importBox').value = String(r.result || ''); }; r.readAsText(file);
+  });
+}
+function doImport(){
+  const txt = ($('#importBox').value || '').trim();
+  let o = null; try{ o = JSON.parse(txt); }catch(e){}
+  if (!valid(o)) { $('#saveMsg').textContent = '讀不到存檔：這不是味憶夜市的存檔碼，或內容不完整。請重新複製一次。'; sfx.bad(); return; }
+  S = o; save(); N = null; closeModal(); toast('存檔讀取完成'); sfx.ok(); showHub();
+}
+
+/* ---------- night ---------- */
+function pickCustomers(n){
+  const pool = unlocked(), out = [];
+  for (let k=0;k<n;k++){
+    const w = pool.map(i => (DISHES[i].zone===S.zone ? 3 : 1) * (S.frags[i]<3 ? 2 : 1));
+    let r = Math.random()*w.reduce((a,b)=>a+b,0), j = 0;
+    while (r > w[j]) { r -= w[j]; j++; }
+    out.push(pool[Math.min(j,pool.length-1)]);
+  }
+  return out;
+}
+function openStall(){
+  N = { list: pickCustomers(customersTonight()), idx:0, secret:true, phase:'',
+        log:{ income:0, tips:0, perfect:0, normal:0, fail:0, left:0, frags:0, cards:[], repStart:S.rep, lvStart:S.lv } };
+  sfx.ok(); go('night'); nextCustomer();
+}
+function nextCustomer(){
+  if (N.idx >= N.list.length) return endNight('最後一位客人吃飽了。');
+  if (S.stamina < 12) return endNight('體力用完了，今晚提早收攤。');
+  const i = N.list[N.idx], max = patienceMax();
+  const others = shuffle(unlocked().filter(j => j!==i));
+  let wrong = others.slice(0, 2);
+  if (wrong.length < 2) wrong = wrong.concat(shuffle(DISHES.map((d,j)=>j).filter(j => j!==i && !wrong.includes(j) && DISHES[j].zone===S.zone)).slice(0, 2-wrong.length));
+  if (S.stats.memory >= 4) wrong = wrong.slice(0,1);
+  N.cur = { i, max, pat:max, options: shuffle([i, ...wrong]), struck:[], step:0, mistakes:0, correct:0, pool:[], prep:0, pmax:0, redo:false };
+  N.phase = 'guess'; drawNight();
+}
+function nightHead(){
+  const c = N.cur, d = DISHES[c.i];
+  return `
+    <div class="queue"><span>客人 ${N.idx+1} / ${N.list.length}</span><span>月嬤的祕方：${N.secret?'剩 1 次':'已用完'}</span></div>
+    <div class="scene"><div class="av">${avatar(c.i)}<br>${esc(d.who)}</div>
+      <div class="bubble say"><span class="who">${N.phase==='guess'?'客人說':'回憶'}</span>「${esc(d.memory)}」</div></div>
+    <div class="pat"><span>耐心</span><div class="bar"><i id="patbar"></i></div><span id="patnum" class="num" style="font-size:18px">${Math.ceil(c.pat)}</span></div>`;
+}
+function drawNight(){
+  const c = N.cur, d = DISHES[c.i];
+  let body = '';
+  if (N.phase === 'guess'){
+    const hint = S.stats.memory >= 2 ? `線索：這是${ZONES[d.zone].cuisine}的味道。` : '從客人的回憶，猜出他想吃的料理。';
+    body = `<div class="panel"><div class="phase-title"><h3>猜猜客人想吃什麼</h3></div><p class="hint">${hint}</p>
+      <div class="opts">${c.options.map(j => `<button class="opt ${c.struck.includes(j)?'no':''}" data-act="guess" data-i="${j}"><span class="e">${DISHES[j].emoji}</span><span>${esc(DISHES[j].name)}<small>庫存 ${stockOf(j)} 份</small></span></button>`).join('')}</div></div>`;
+  } else if (N.phase === 'prep'){
+    const hints = Math.min(4, S.stats.memory - 1);
+    const slots = d.steps.map((s,k) => `<div class="slot ${k<c.step?'done':''}" aria-label="${k<c.step?esc(s):'空格'}">${k<c.step?ING[s]:''}</div>`).join('');
+    body = `<div class="panel"><div class="phase-title"><h3>依序備料：${esc(d.name)}</h3><span class="hint">失誤 ${c.mistakes}</span></div>
+      <p class="hint">照正確順序點選 4 樣食材。${hints>0?'發光的是月嬤提醒你的下一步。':''}</p>
+      <div class="timer" aria-hidden="true"><i id="prepbar"></i></div>
+      <div class="slots">${slots}</div>
+      <div class="ings">${c.pool.map(s => {
+        const used = d.steps.indexOf(s) > -1 && d.steps.indexOf(s) < c.step;
+        const glow = !used && c.step < hints && s === d.steps[c.step];
+        return `<button class="ing ${used?'used':''} ${glow?'glow':''}" data-act="ing" data-s="${esc(s)}"><span class="e">${ING[s]}</span>${esc(s)}</button>`; }).join('')}</div></div>`;
+  } else if (N.phase === 'heat'){
+    const z = c.zone, y = 8;
+    body = `<div class="panel"><div class="phase-title"><h3>火候判定</h3><span class="hint">綠區 ${z.w.toFixed(0)}%</span></div>
+      <div class="wok" aria-hidden="true">🍳</div>
+      <div class="heat" aria-hidden="true">
+        <div class="zy" style="left:${z.c - z.w/2 - y}%;width:${z.w + y*2}%"></div>
+        <div class="zg" style="left:${z.c - z.w/2}%;width:${z.w}%"></div>
+        <div class="ptr" id="ptr" style="left:${c.pos}%"></div></div>
+      <div class="legend"><span style="--c:var(--jade)">完美 +30</span><span style="--c:rgba(242,163,58,.6)">不錯 +15</span><span style="--c:var(--night-3)">失手 0</span></div>
+      <button class="btn primary" data-act="stop" style="font-size:20px;padding:16px">起鍋！</button></div>`;
+  } else if (N.phase === 'result'){
+    const r = c.res;
+    const fragLine = r.tier===1 ? (S.frags[c.i] < 3 ? `<p>回憶碎片 +1（${S.frags[c.i]+1}/3）</p>` : `<p class="hint">這道菜的回憶已經集滿了。</p>`) : '';
+    body = `<div class="panel glow"><p class="tier t${r.tier}">${['','完美上菜！','普通，客人吃飽了','客人失望地離開了……'][r.tier]}</p>
+      <div class="score"><span>食材正確</span><span class="num">${r.ing}/50</span>
+        <span>火候（${r.heatLabel}）</span><span class="num">${r.heat}/30</span>
+        <span>速度</span><span class="num">${r.speed}/20</span></div>
+      <div class="total"><span>料理分數</span><span class="num">${r.total}</span></div>
+      <p class="hint">${r.tier===1?`餐費 $${dishPrice(c.i)} ＋ 小費 $${r.tip}・口碑上升`:r.tier===2?`餐費 $${dishPrice(c.i)}・沒有回憶碎片`:'口碑下降，用掉的食材拿不回來'}</p>
+      ${fragLine}
+      <div class="row">${r.tier>1 && N.secret ? `<button class="btn" data-act="redo">用月嬤的祕方重做</button>` : ''}
+        <button class="btn primary" data-act="serve">下一位客人</button></div></div>`;
+  } else if (N.phase === 'left'){
+    body = `<div class="panel"><p class="tier t3">${esc(N.leftMsg)}</p><p class="hint">口碑下降。</p>
+      <button class="btn primary" data-act="serve">下一位客人</button></div>`;
+  }
+  screen().innerHTML = nightHead() + body;
+  updateBars();
+}
+function updateBars(){
+  const c = N && N.cur; if (!c) return;
+  const pb = $('#patbar'), pn = $('#patnum');
+  if (pb){ const r = clamp(c.pat/c.max,0,1); pb.style.width = (r*100)+'%'; pb.style.background = r<.3 ? 'var(--red)' : r<.6 ? 'var(--lantern)' : 'var(--jade)'; }
+  if (pn) pn.textContent = Math.max(0, Math.ceil(c.pat));
+  const pr = $('#prepbar'); if (pr && c.pmax) pr.style.width = (clamp(c.prep/c.pmax,0,1)*100)+'%';
+  const p = $('#ptr'); if (p) p.style.left = c.pos+'%';
+}
+function onGuess(j){
+  const c = N.cur;
+  if (j !== c.i){
+    sfx.bad(); c.struck.push(j); c.pat -= c.max*.25;
+    toast('「不是這個味道……」'); drawNight(); return;
+  }
+  if (stockOf(j) < 1){ return customerLeft('沒有這道菜的食材了，客人只好離開。'); }
+  S.stock[j].sort((a,b)=>a-b); S.stock[j].shift();
+  S.stamina = Math.max(0, S.stamina - 12);
+  sfx.ok(); startPrep(); renderHud();
+}
+function startPrep(){
+  const c = N.cur, d = DISHES[c.i];
+  const others = shuffle(Object.keys(ING).filter(s => !d.steps.includes(s))).slice(0,4);
+  c.pool = shuffle(d.steps.concat(others)); c.step = 0; c.mistakes = 0; c.correct = 0;
+  c.pmax = prepMax(); c.prep = c.pmax; N.phase = 'prep'; drawNight();
+}
+function onIng(s, el){
+  const c = N.cur, d = DISHES[c.i];
+  if (s === d.steps[c.step]){ c.step++; c.correct++; sfx.tap(); if (c.step >= 4){ sfx.sizzle(); return startHeat(); } drawNight(); }
+  else { c.mistakes++; sfx.bad(); if (el){ el.classList.remove('shake'); void el.offsetWidth; el.classList.add('shake'); }
+    const m = screen().querySelector('.phase-title .hint'); if (m) m.textContent = '失誤 ' + c.mistakes; }
+}
+function startHeat(){
+  const c = N.cur, w = greenW();
+  c.zone = { w, c: 20 + w/2 + Math.random()*(60 - w) };
+  c.pos = 0; c.dir = 1; c.speed = 70 + DISHES[c.i].zone*8;
+  N.phase = 'heat'; drawNight();
+}
+function onStop(){
+  const c = N.cur, d = Math.abs(c.pos - c.zone.c), g = c.zone.w/2;
+  const heat = d <= g ? 30 : d <= g+8 ? 15 : 0;
+  const ing = Math.round(50 * c.correct / (4 + c.mistakes));
+  const speed = Math.round(20 * clamp(c.pat/c.max, 0, 1));
+  const total = ing + heat + speed;
+  const tier = total >= 80 ? 1 : total >= 50 ? 2 : 3;
+  c.res = { ing, heat, heatLabel: heat===30?'完美':heat===15?'不錯':'失手', speed, total, tier, tip: 10 + S.stats.charm*5 };
+  tier===1 ? sfx.perfect() : tier===2 ? sfx.ok() : sfx.bad();
+  sfx.sizzle(.4,.05);
+  N.phase = 'result'; drawNight();
+}
+function onRedo(){
+  N.secret = false; const c = N.cur; c.pat = Math.max(c.pat, c.max*.6);
+  toast('月嬤的祕方：再試一次！'); startPrep();
+}
+function addExp(n){
+  S.exp += n;
+  while (S.exp >= expNeed(S.lv)){ S.exp -= expNeed(S.lv); S.lv++; S.points += 2; toast(`升到 Lv ${S.lv}！獲得 2 點能力點`); sfx.lantern(); }
+}
+function onServe(){
+  let unlockedCard = -1;
+  if (N.phase === 'result'){
+    const c = N.cur, r = c.res, z = DISHES[c.i].zone;
+    S.served++;
+    if (r.tier === 1){
+      S.money += dishPrice(c.i) + r.tip; N.log.income += dishPrice(c.i); N.log.tips += r.tip;
+      S.rep = clamp(S.rep + .3, 1, 5); N.log.perfect++; addExp(30 + z*5);
+      if (S.frags[c.i] < 3){ S.frags[c.i]++; N.log.frags++; if (S.frags[c.i] === 3){ unlockedCard = c.i; N.log.cards.push(c.i); } }
+    } else if (r.tier === 2){
+      S.money += dishPrice(c.i); N.log.income += dishPrice(c.i); N.log.normal++; addExp(15 + z*5);
+    } else {
+      S.rep = clamp(S.rep - .4, 1, 5); N.log.fail++; addExp(5);
+    }
+  }
+  N.idx++; N.cur = null; renderHud();
+  if (unlockedCard >= 0){
+    sfx.lantern();
+    openModal(`<div class="sheet-head"><h2>點亮第 ${cardsDone()} 盞燈籠</h2></div>
+      ${lanternRow(cardsDone(),'big')}${recipeCard(unlockedCard)}
+      <button class="btn primary" data-act="close">繼續營業</button>`, () => nextCustomer());
+  } else nextCustomer();
+}
+function customerLeft(msg){
+  sfx.bad(); S.rep = clamp(S.rep - .4, 1, 5); N.log.left++;
+  N.leftMsg = msg; N.phase = 'left'; drawNight(); renderHud();
+}
+function endNight(reason){
+  const fresh = freshNights(); let spoiled = 0;
+  for (const k of Object.keys(S.stock)){
+    const before = S.stock[k].length;
+    S.stock[k] = S.stock[k].filter(b => S.night - b + 1 < fresh);
+    spoiled += before - S.stock[k].length;
+  }
+  S.zoneNights++;
+  let newZone = -1;
+  if (S.zone < 4 && S.zoneNights >= 3 && S.rep >= 3 && zoneDone(S.zone)){ S.zone++; S.zoneNights = 0; newZone = S.zone; }
+  const ending = !S.ended && cardsDone() === 15;
+  const L = N.log, night = S.night;
+  S.night++; S.stamina = 100; save();
+  N = null; go('summary');
+  const repDiff = S.rep - L.repStart;
+  screen().innerHTML = `
+    <div class="panel glow">
+      <p class="eyebrow">第 ${night} 夜・收攤結算</p>
+      <h2 style="font-size:26px">${esc(reason)}</h2>
+      <div class="score">
+        <span>完美上菜</span><span class="num">${L.perfect}</span>
+        <span>普通</span><span class="num">${L.normal}</span>
+        <span>失望離開</span><span class="num">${L.fail + L.left}</span>
+        <span>餐費收入</span><span class="num">$${L.income}</span>
+        <span>小費</span><span class="num">$${L.tips}</span>
+        <span>口碑變化</span><span class="num">${repDiff>=0?'+':''}${repDiff.toFixed(1)}</span>
+        <span>回憶碎片</span><span class="num">+${L.frags}</span>
+        <span>壞掉的食材</span><span class="num">${spoiled} 份</span>
+      </div>
+      ${L.cards.length ? `<p>今晚點亮了：${L.cards.map(i=>esc(DISHES[i].name)).join('、')}</p>` : ''}
+      ${newZone>0 ? `<p class="warn">新街區開放：${ZONES[newZone].name}（${ZONES[newZone].cuisine}）</p>` : ''}
+      ${S.lv > L.lvStart ? `<p class="warn">等級提升！記得到「攤主能力」分配能力點。</p>` : ''}
+      <p class="hint">已自動存檔。</p>
+    </div>
+    <button class="btn primary" data-act="${ending?'ending':'home'}">${ending?'夜市好像有點不一樣……':'回家休息，迎接下一夜'}</button>`;
+}
+
+/* ---------- main loop ---------- */
+let last = 0;
+function loop(t){
+  const dt = Math.min(.05, last ? (t - last)/1000 : 0); last = t;
+  if (N && N.cur && $('#modal').hidden && ['guess','prep','heat'].includes(N.phase)){
+    const c = N.cur;
+    c.pat -= dt;
+    if (c.pat <= 0){ customerLeft('等太久了，客人生氣地走了……'); }
+    else {
+      if (N.phase === 'prep'){ c.prep -= dt; if (c.prep <= 0){ toast('時間到！先下鍋再說'); startHeat(); } }
+      else if (N.phase === 'heat'){
+        c.pos += c.dir * c.speed * dt;
+        if (c.pos >= 100){ c.pos = 100; c.dir = -1; } if (c.pos <= 0){ c.pos = 0; c.dir = 1; }
+      }
+      updateBars();
+    }
+  }
+  requestAnimationFrame(loop);
+}
+
+/* ---------- events ---------- */
+document.addEventListener('click', e => {
+  const b = e.target.closest('[data-act]'); if (!b || b.disabled) return;
+  const a = b.dataset.act;
+  ac();
+  switch (a){
+    case 'newgame':
+      if (loadSave()){
+        openModal(`<div class="sheet-head"><h2>重新開始？</h2></div><p>現有的存檔會被覆蓋，這個動作不能復原。</p>
+          <div class="row"><button class="btn" data-act="close">取消</button><button class="btn primary" data-act="newconfirm">確定重新開始</button></div>`);
+      } else startNew();
+      break;
+    case 'newconfirm': closeModal(); startNew(); break;
+    case 'continue': S = loadSave(); if (S) showHub(); else showTitle(); break;
+    case 'next': storyNext && storyNext(); break;
+    case 'skip': storySkip && storySkip(); break;
+    case 'market': cart = {}; showMarket(); break;
+    case 'cart': { const i = +b.dataset.i; cart[i] = clamp((cart[i]||0) + (+b.dataset.d), 0, 20); sfx.tap(); showMarket(); break; }
+    case 'cartfill': {
+      cart = {}; const need = customersTonight() - totalStock();
+      const zp = unlocked().filter(j => DISHES[j].zone === S.zone);
+      for (let k=0;k<need;k++){ const i = zp[k % zp.length]; cart[i] = (cart[i]||0)+1; }
+      if (need <= 0) toast('庫存已經夠今晚用了');
+      sfx.tap(); showMarket(); break; }
+    case 'buy': {
+      const total = Object.entries(cart).reduce((n,[i,q]) => n + bundleCost(+i)*q, 0);
+      if (total > S.money || total === 0) break;
+      S.money -= total;
+      for (const [i,q] of Object.entries(cart)){ S.stock[i] = S.stock[i] || []; for (let k=0;k<q;k++) S.stock[i].push(S.night); }
+      cart = {}; save(); sfx.ok(); toast('採購完成'); showMarket(); renderHud(); showHubSilently(); break; }
+    case 'upgrade': {
+      const k = b.dataset.k, u = UPGRADES[k];
+      if (S.money >= u.price && !S.upgrades[k]){ S.money -= u.price; S.upgrades[k] = true; save(); sfx.lantern(); toast(`買下了${u.name}`); showMarket(); renderHud(); showHubSilently(); }
+      break; }
+    case 'stats': showStats(); break;
+    case 'addstat': { const k = b.dataset.k; if (S.points > 0 && S.stats[k] < 10){ S.points--; S.stats[k]++; save(); sfx.tap(); showStats(); renderHud(); showHubSilently(); } break; }
+    case 'album': showAlbum(); break;
+    case 'card': openModal(`<div class="sheet-head"><h2>料理卡</h2><button class="btn small ghost" data-act="album">返回圖鑑</button></div>${recipeCard(+b.dataset.i)}`); break;
+    case 'saves': showSaves(); break;
+    case 'copy': {
+      const box = $('#exportBox'); const txt = box ? box.value : '';
+      const fallback = () => { if (box){ box.focus(); box.select(); } $('#saveMsg').textContent = '已幫你選取存檔碼，請按「複製」。'; };
+      try { navigator.clipboard.writeText(txt).then(() => { $('#saveMsg').textContent = '已複製存檔碼。'; }, fallback); } catch(err){ fallback(); }
+      break; }
+    case 'import': doImport(); break;
+    case 'close': closeModal(); break;
+    case 'open': openStall(); break;
+    case 'guess': onGuess(+b.dataset.i); break;
+    case 'ing': onIng(b.dataset.s, b); break;
+    case 'stop': onStop(); break;
+    case 'redo': onRedo(); break;
+    case 'serve': onServe(); break;
+    case 'home': showHub(); break;
+    case 'ending': showStory(ENDING, () => { S.ended = true; save(); showCredits(); }); break;
+    case 'mute': muted = !muted; renderHud(); break;
+  }
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && !$('#modal').hidden && !modalOnClose) closeModal();
+  if ((e.key === ' ' || e.key === 'Enter') && N && N.phase === 'heat' && $('#modal').hidden && document.activeElement?.dataset?.act !== 'stop'){ e.preventDefault(); onStop(); }
+});
+$('#modal').addEventListener('click', e => { if (e.target.id === 'modal' && !modalOnClose) closeModal(); });
+
+function showHubSilently(){ if (view === 'hub') { const st = screen().scrollTop; showHub(); screen().scrollTop = st; } }
+function startNew(){
+  S = newState(); S.stock = { 0:[1,1], 1:[1,1], 2:[1] }; save();
+  showStory(INTRO, () => { showHub(); toast('先看看庫存，再按「開攤營業」'); });
+}
+function showCredits(){
+  go('story');
+  screen().innerHTML = `<div class="title-wrap">
+    ${lanternRow(15,'big')}
+    <h1 style="font-size:52px">感謝遊玩</h1>
+    <p class="sub">味憶夜市：港都深夜食堂</p>
+    <p class="muted">你一共招待了 ${S.served} 位客人，花了 ${S.night-1} 個夜晚，點亮了 15 盞燈籠。</p>
+    <p class="muted">夜市會繼續營業，你可以回去刷更高的口碑。</p>
+    <button class="btn primary" data-act="home">回到夜市</button></div>
+    <p class="credit">生成式AI應用 期中專題・阮庭陽</p>`;
+}
+
+/* ---------- boot (keeps progress across live updates) ---------- */
+function boot(data){
+  const st = data && data.state;
+  if (st && valid(st)) { S = st; showHub(); } else showTitle();
+  requestAnimationFrame(loop);
+}
+try { window.claude?.hot?.snapshot?.(() => ({ state: S })); } catch(e){}
+window.claude?.hot?.ready ? window.claude.hot.ready(boot) : boot(window.claude?.hot?.data ?? {});
+</script>
+
+</body>
+</html>
