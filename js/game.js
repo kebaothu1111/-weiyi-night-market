@@ -1,0 +1,846 @@
+'use strict';
+/* ---------- helpers ---------- */
+const $ = s => document.querySelector(s);
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const rnd = n => Math.floor(Math.random() * n);
+const pick = a => a[rnd(a.length)];
+const shuffle = a => { a = a.slice(); for (let i = a.length - 1; i > 0; i--) { const j = rnd(i + 1); [a[i], a[j]] = [a[j], a[i]]; } return a; };
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;' }[c]));
+const TOOLS = Object.keys(METHODS);
+try { LANG = +localStorage.getItem('weiyi-lang') || 0; } catch (e) {}
+
+/* ---------- state & save ---------- */
+const SAVE_KEY = 'weiyi-night-market-v2', OLD_KEY = 'weiyi-night-market-v1';
+let S = null;          // saved state
+let N = null;          // tonight's runtime (not saved)
+let muted = false, view = 'title', redraw = null, T = 0, pendingBill = false;
+
+function newState(){
+  return { v:2, day:1, zone:0, zoneNights:0, lv:1, exp:0, points:0, stats:{ knife:1, heat:1, memory:1, charm:1 },
+    stamina:100, money:800, rep:2, frags:Array(15).fill(0), inv:{}, tools:{ wok:1, pan:1, pot:1, grill:1, fryer:1, steamer:1 },
+    shop:1, gear:{ fridge:0, sign:0, fan:0 }, ended:false, served:0, visited:0 };
+}
+function valid(o){
+  try {
+    return !!o && o.v === 2 &&
+      ['day','zone','zoneNights','lv','exp','points','stamina','money','rep','served','shop','visited'].every(k => Number.isFinite(o[k])) &&
+      o.zone >= 0 && o.zone <= 4 && o.day >= 1 && o.lv >= 1 && o.shop >= 1 && o.shop <= 4 &&
+      o.stats && Object.keys(STATS).every(k => Number.isFinite(o.stats[k]) && o.stats[k] >= 1 && o.stats[k] <= 10) &&
+      Array.isArray(o.frags) && o.frags.length === 15 && o.frags.every(f => Number.isFinite(f) && f >= 0 && f <= 3) &&
+      o.inv && typeof o.inv === 'object' && Object.entries(o.inv).every(([k, a]) => ING[k] && Array.isArray(a) && a.every(Number.isFinite)) &&
+      o.tools && TOOLS.every(k => Number.isFinite(o.tools[k]) && o.tools[k] >= 1 && o.tools[k] <= 5) &&
+      o.gear && Object.keys(GEAR).every(k => Number.isFinite(o.gear[k]) && o.gear[k] >= 0 && o.gear[k] <= GEAR[k].max);
+  } catch (e) { return false; }
+}
+// Old v1 saves (single-file version): keep progress, start fresh on the new systems.
+function migrate(o){
+  if (!o || o.v !== 1 || !Array.isArray(o.frags) || o.frags.length !== 15) return null;
+  const s = newState();
+  ['zone','zoneNights','lv','exp','points','money','rep','served','ended'].forEach(k => { if (o[k] !== undefined) s[k] = o[k]; });
+  s.day = o.night || 1; s.frags = o.frags.slice(); if (o.stats) s.stats = Object.assign(s.stats, o.stats);
+  s.money = Math.max(s.money, 800); starterStock(s);
+  return valid(s) ? s : null;
+}
+function save(){ try { localStorage.setItem(SAVE_KEY, JSON.stringify(S)); } catch (e) {} }
+function loadSave(){
+  try {
+    const r = localStorage.getItem(SAVE_KEY);
+    if (r) { const o = JSON.parse(r); return valid(o) ? o : null; }
+    const old = localStorage.getItem(OLD_KEY); return old ? migrate(JSON.parse(old)) : null;
+  } catch (e) { return null; }
+}
+
+/* ---------- derived rules ---------- */
+const expNeed = lv => 80 + 40 * (lv - 1);
+const staminaMax = () => 100 + (S.shop - 1) * 30;
+const patienceMax = () => 30 + S.stats.charm * 3 + (S.gear.fan ? 6 : 0);
+const prepMax = () => 7 + S.stats.knife * 1.5;
+const zoneW = m => 7 + S.stats.heat * 1.5 + (S.tools[m] - 1) * 4;          // starts narrow, widens with heat stat + tool tier
+const ptrSpeed = (m, z) => (100 + z * 8) * (1 - (S.tools[m] - 1) * 0.12);  // pointer slows down with tool tier
+const warmTime = m => 3 - (S.tools[m] - 1) * 0.6;                           // better tools cook faster
+const toolBonus = m => (S.tools[m] - 1) * 5;                                // quality bonus → higher rank
+const freshDays = () => 2 + S.gear.fridge;
+const seats = () => SHOP_LV[S.shop - 1].seats;
+const customersTonight = () => 2 + Math.floor(S.rep) + Math.floor(seats() / 2) + (S.gear.sign ? 2 : 0);
+const dishPrice = i => 90 + DISHES[i].zone * 20;
+const unlocked = () => DISHES.map((d, i) => i).filter(i => DISHES[i].zone <= S.zone);
+const cardsDone = () => S.frags.filter(f => f >= 3).length;
+const zoneCards = z => DISHES.filter((d, i) => d.zone === z && S.frags[i] >= 3).length;
+const zoneDone = z => zoneCards(z) === 3;
+const stars = r => '★'.repeat(Math.floor(r)) + '☆'.repeat(5 - Math.floor(r));
+const weekday = () => (S.day - 1) % 7;
+const bills = () => ({ rent: SHOP_LV[S.shop - 1].rent,
+  power: 80 + 20 * (TOOLS.reduce((n, k) => n + S.tools[k], 0) - 6) + 40 * (S.shop - 1) + 50 * S.gear.sign + 30 * S.gear.fridge + 20 * S.gear.fan,
+  hosp: S.ended ? 0 : 600 });
+const billTotal = () => { const b = bills(); return b.rent + b.power + b.hosp; };
+const rankOf = q => RANKS.find(r => q >= r.min);
+const dName = i => L(DISHES[i].name);
+
+/* ---------- inventory ---------- */
+const have = k => (S.inv[k] || []).length;
+const lacking = i => DISHES[i].steps.filter(k => have(k) < 1);
+const servings = i => Math.min(...DISHES[i].steps.map(have));
+function addInv(k, units, s = S){ s.inv[k] = s.inv[k] || []; for (let u = 0; u < units; u++) s.inv[k].push(ING[k].f ? s.day : 0); }
+function take(k){ const a = S.inv[k]; if (!a || !a.length) return false; a.sort((x, y) => x - y); a.shift(); return true; }
+function starterStock(s){
+  DISHES.forEach((d, i) => { if (d.zone <= s.zone) d.steps.forEach(k => { if ((s.inv[k] || []).length < 2) addInv(k, 2, s); }); });
+  addInv('鹽', 10, s); addInv('糖', 5, s);
+}
+function shopItems(shop){
+  const used = new Set(); unlocked().forEach(i => DISHES[i].steps.forEach(k => used.add(k)));
+  return Object.keys(ING).filter(k => ING[k].s === shop && (used.has(k) || ING[k].seas));
+}
+function targetUnits(k){
+  if (k === '鹽') return 10;
+  if (k === '糖') return unlocked().some(i => DISHES[i].sweet) ? 5 : 0;
+  return 2 * unlocked().filter(i => DISHES[i].steps.includes(k)).length;
+}
+
+/* ---------- audio (Web Audio API, synthesized) ---------- */
+let AC = null;
+function ac(){
+  if (muted) return null;
+  try { if (!AC) AC = new (window.AudioContext || window.webkitAudioContext)(); if (AC.state === 'suspended') AC.resume(); } catch (e) { AC = null; }
+  return AC;
+}
+function tone(f, d, type = 'sine', vol = .12, when = 0, f2){
+  const a = ac(); if (!a) return;
+  const o = a.createOscillator(), g = a.createGain(), t0 = a.currentTime + when;
+  o.type = type; o.frequency.setValueAtTime(f, t0); if (f2) o.frequency.exponentialRampToValueAtTime(f2, t0 + d);
+  g.gain.setValueAtTime(vol, t0); g.gain.exponentialRampToValueAtTime(.001, t0 + d);
+  o.connect(g).connect(a.destination); o.start(t0); o.stop(t0 + d + .05);
+}
+function noise(d = .6, vol = .08, hp = 2400){
+  const a = ac(); if (!a) return;
+  const len = Math.floor(a.sampleRate * d), buf = a.createBuffer(1, len, a.sampleRate), ch = buf.getChannelData(0);
+  for (let i = 0; i < len; i++) ch[i] = (Math.random() * 2 - 1) * (Math.random() < .05 ? 1 : .35);
+  const src = a.createBufferSource(), f = a.createBiquadFilter(), g = a.createGain(), t0 = a.currentTime;
+  f.type = hp > 0 ? 'highpass' : 'lowpass'; f.frequency.value = Math.abs(hp); src.buffer = buf;
+  g.gain.setValueAtTime(vol, t0); g.gain.exponentialRampToValueAtTime(.001, t0 + d);
+  src.connect(f).connect(g).connect(a.destination); src.start(t0);
+}
+const sfx = {
+  tap: () => tone(700, .06, 'square', .04),
+  ok: () => { tone(523, .12, 'triangle'); tone(784, .18, 'triangle', .12, .09); },
+  bad: () => tone(150, .25, 'sawtooth', .07),
+  perfect: () => [523, 659, 784, 1047].forEach((f, i) => tone(f, .22, 'triangle', .11, i * .08)),
+  lantern: () => [784, 988, 1175, 1568].forEach((f, i) => tone(f, .4, 'sine', .09, i * .12)),
+  coin: () => { tone(1320, .08, 'square', .05); tone(1760, .14, 'square', .05, .07); },
+  door: () => { tone(880, .25, 'sine', .07); tone(660, .35, 'sine', .07, .18); },
+  ghost: () => { tone(220, 1.4, 'sawtooth', .04, 0, 110); tone(233, 1.4, 'sine', .05, 0, 117); },
+  thud: () => noise(.35, .2, -300),
+  cook: m => m === 'pot' || m === 'steamer' ? [0, .15, .3].forEach(w => tone(300 + rnd(200), .12, 'sine', .04, w, 600)) : noise(m === 'grill' ? .5 : .7, .07, m === 'grill' ? 900 : 2400)
+};
+
+/* ---------- stage, UI plumbing ---------- */
+const stage = $('#stage'), layer = $('#layer'), sceneCv = $('#scene'), G = sceneCv.getContext('2d');
+G.imageSmoothingEnabled = false;
+let rotDismissed = false;
+function fit(){
+  const s = Math.min(innerWidth / 960, innerHeight / 540);
+  stage.style.transform = `translate(${(innerWidth - 960 * s) / 2}px,${(innerHeight - 540 * s) / 2}px) scale(${s})`;
+  const portrait = innerHeight > innerWidth && innerWidth < 820 && !rotDismissed;
+  const r = $('#rotate'); r.hidden = !portrait;
+  if (portrait) r.innerHTML = `<div class="ph">📱</div><h2>${t('rotate')}</h2><p class="muted">${t('rotateSub')}</p><button class="btn" data-act="anyway">${t('anyway')}</button>`;
+}
+addEventListener('resize', fit); addEventListener('orientationchange', () => setTimeout(fit, 200));
+let toastTimer = 0;
+function toast(msg, ms = 2400){ const el = $('#toast'); el.textContent = msg; el.hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => el.hidden = true, ms); }
+let modalOnClose = null;
+function openModal(html, onClose){ $('#sheet').className = 'sheet frame'; $('#sheet').innerHTML = html; $('#modal').hidden = false; modalOnClose = onClose || null; }
+function closeModal(){ $('#modal').hidden = true; $('#sheet').innerHTML = ''; const cb = modalOnClose; modalOnClose = null; if (cb) cb(); }
+function floatText(txt, x, y, color){ // x,y in scene pixels
+  const d = document.createElement('div'); d.className = 'float'; d.textContent = txt; d.style.left = (x * 2 - 20) + 'px'; d.style.top = (y * 2 - 60) + 'px';
+  if (color) d.style.color = color; stage.appendChild(d); setTimeout(() => d.remove(), 1300);
+}
+function portraitHTML(look, name){ return `<div class="pframe"><canvas width="24" height="24" data-look='${esc(JSON.stringify(look))}'></canvas><span class="nm">${esc(name)}</span></div>`; }
+function paintPortraits(root = layer){ root.querySelectorAll('canvas[data-look]').forEach(c => { try { ART.portrait(c, JSON.parse(c.dataset.look)); } catch (e) {} }); }
+function lanterns(n){ let h = '<div class="lans">'; for (let i = 0; i < 15; i++) h += `<span class="lan ${i < n ? 'on' : ''}"></span>`; return h + '</div>'; }
+
+function renderHud(){
+  const hud = $('#hud');
+  if (!S || !['day','night','map','summary'].includes(view)) { hud.hidden = true; return; }
+  hud.hidden = false; hud.className = 'frame';
+  const need = expNeed(S.lv), sm = staminaMax(), wd = weekday();
+  const bill = wd === 6 ? t('billTonight', billTotal()) : t('billIn', billTotal(), 6 - wd);
+  hud.innerHTML = `
+    <div class="hchip"><span class="hday">${t('day', S.day)}・${L(STR.wd)[wd]}<small>${esc(L(ZONES[S.zone].name))}</small></span></div>
+    ${lanterns(cardsDone())}
+    <div class="hchip"><span class="k">${t('money')}</span><span class="v num" style="color:${S.money < billTotal() ? 'var(--red)' : 'var(--gold)'}">$${S.money}</span></div>
+    <div class="hchip"><span class="k">${t('rep')} ${S.rep.toFixed(1)}</span><span class="v" style="font-size:12px;color:var(--lantern);letter-spacing:-1px">${stars(S.rep)}</span></div>
+    <div class="hchip"><span class="k">${t('stamina')} ${Math.round(S.stamina)}/${sm}</span><div class="meter"><i style="width:${S.stamina / sm * 100}%"></i></div></div>
+    <div class="hchip"><span class="k">Lv ${S.lv}${S.points ? ` <b style="color:var(--lantern)">+${S.points}</b>` : ''}</span><div class="meter"><i style="width:${clamp(S.exp / need * 100, 0, 100)}%;background:var(--lantern)"></i></div></div>
+    <div class="hspace"></div>
+    <div class="hbill">${wd === 6 ? `<b>${esc(bill)}</b>` : esc(bill)}</div>
+    <button class="hbtn" data-act="lang">${LANG ? '中文' : 'VI'}</button>
+    <button class="hbtn" data-act="mute">${t('sound')} ${muted ? 'OFF' : 'ON'}</button>
+    <button class="hbtn" data-act="fs" aria-label="${t('fullscreen')}">⛶</button>`;
+}
+function renderDock(){
+  const d = $('#dock'); let h = '';
+  if (view === 'day') h = `
+    <button class="btn" data-act="map"><span class="i">🗺️</span>${t('map')}</button>
+    <button class="btn" data-act="stats"><span class="i">📜</span>${t('stats')}${S.points ? `<span class="badge">${S.points}</span>` : ''}</button>
+    <button class="btn" data-act="album"><span class="i">🏮</span>${t('album')}</button>
+    <button class="btn" data-act="saves"><span class="i">💾</span>${t('saves')}</button>
+    <button class="btn primary big" data-act="open"><span class="i">🍜</span>${t('open')}</button>`;
+  else if (view === 'night' && N && N.phase === 'idle') {
+    const w = N.people.some(p => p.state === 'wait');
+    h = `<button class="btn" data-act="closeearly"><span class="i">🌙</span>${t('closeEarly')}</button>
+      <button class="btn primary big" data-act="servenext" ${w ? '' : 'disabled'}><span class="i">🙋</span>${t('serveNext')}</button>`;
+  } else if (view === 'map') h = `<button class="btn primary big" data-act="tostall"><span class="i">🏮</span>${t('toStall')}</button>`;
+  d.hidden = !h; d.innerHTML = h;
+}
+function go(v){ view = v; renderHud(); renderDock(); }
+
+/* ---------- title ---------- */
+function langSwitch(){ return `<div class="langsw"><button class="hbtn ${LANG ? '' : 'on'}" data-act="setlang" data-l="0">中文</button><button class="hbtn ${LANG ? 'on' : ''}" data-act="setlang" data-l="1">Tiếng Việt</button></div>`; }
+function showTitle(){
+  go('title'); redraw = showTitle;
+  const has = !!loadSave();
+  layer.innerHTML = `<div class="full clear">${langSwitch()}
+    <p class="eyebrow">KAOHSIUNG HARBOR ・ MIDNIGHT</p>
+    <div class="logo">味憶夜市</div>
+    <div class="logo-sub">${LANG ? `${t('title')} ・ ${t('sub')}` : t('sub')}</div>
+    <p class="tagline">${t('tagline')}</p>
+    <div class="row" style="justify-content:center;margin-top:6px">
+      ${has ? `<button class="btn primary big" data-act="continue">${t('cont')}</button>` : ''}
+      <button class="btn ${has ? '' : 'primary'} big" data-act="newgame">${has ? t('restart') : t('newgame')}</button>
+      <button class="btn ghost" data-act="saves">${t('importSave')}</button>
+    </div>
+    <p class="credit">${t('credit')}</p></div>`;
+}
+
+/* ---------- story panels ---------- */
+let storyNext = null, storySkip = null;
+function showStory(panels, done){
+  go('story'); let i = 0;
+  const draw = () => {
+    redraw = draw;
+    const p = panels[i], sp = p.who ? SPECIAL[p.who] : null;
+    layer.innerHTML = `<div class="full">${langSwitch()}
+      ${sp ? '' : lanterns(panels === ENDING ? 15 : Math.min(15, i * 3 + 1)).replace('lans', 'lans" style="transform:scale(2.2);margin-bottom:60px')}
+      <div class="story-box frame gold">${sp ? portraitHTML(sp.look, L(sp.name)) : ''}
+        <div class="dbody"><p class="dtext">${sp ? `<span class="who">${esc(L(sp.name))}</span>` : ''}${esc(L(p.text))}</p>
+        <div class="row" style="justify-content:flex-end"><span class="muted" style="flex:1;font-size:12px">${i + 1} / ${panels.length}</span>
+          <button class="btn ghost" data-act="skip">${t('skip')}</button><button class="btn primary" data-act="next">${i < panels.length - 1 ? t('next') : t('start')}</button></div></div></div></div>`;
+    paintPortraits();
+  };
+  storyNext = () => { sfx.tap(); if (++i >= panels.length) done(); else draw(); };
+  storySkip = () => done();
+  draw();
+}
+
+/* ---------- day (stall, closed) ---------- */
+function showHub(){
+  go('day'); redraw = showHub; N = null;
+  const z = S.zone, short = unlocked().filter(i => lacking(i).length).length;
+  const goal = z < 4 ? t('goalZone', S.rep.toFixed(1), zoneCards(z), Math.min(S.zoneNights, 3)) : t('goalEnd', cardsDone());
+  layer.innerHTML = `<div class="tip frame"><b>${esc(L(SHOP_LV[S.shop - 1].name))}</b> ・ ${esc(L(ZONES[z].cuisine))}<br>${esc(goal)}
+    ${short ? `<br><span class="warn">${t('lowStock', short)}</span>` : `<br>${t('dayHint')}`}
+    ${S.ended ? `<br><span class="good">${t('keepPlaying')}</span>` : ''}</div>`;
+}
+
+/* ---------- map ---------- */
+function showMap(){
+  go('map'); redraw = showMap;
+  const spots = Object.entries(ART.MAP_SPOTS).map(([k, p]) =>
+    `<button class="spot" data-act="spot" data-k="${k}" style="left:${p.x * 2}px;top:${p.y * 2 - 40}px">${esc(L(SHOPS[k].name))}<small>${esc(L(SHOPS[k].desc))}</small></button>`).join('');
+  layer.innerHTML = `<div class="maptitle frame"><b>${t('map')}</b> ・ ${t('day', S.day)} ${L(STR.wd)[weekday()]}</div>${spots}`;
+}
+let cart = {}, shopKey = '';
+function showShop(k){
+  shopKey = k;
+  const items = shopItems(k), total = items.reduce((n, x) => n + (cart[x] || 0) * ING[x].p, 0);
+  const rows = items.map(x => {
+    const g = ING[x], q = cart[x] || 0, uses = unlocked().filter(i => DISHES[i].steps.includes(x)).map(dName).join('、');
+    return `<div class="item"><span class="e">${g.e}</span><div class="grow"><b>${esc(ingName(x))} <span class="muted" style="font-weight:400">$${g.p}・${t('pack', g.n)}</span></b>
+      <small>${t('have', have(x))}・${g.f ? t('fresh', freshDays()) : t('dry')}${uses ? '・' + esc(t('usedBy', uses)) : ''}</small></div>
+      <div class="qty"><button data-act="cart" data-k="${esc(x)}" data-d="-1">−</button><span class="num">${q}</span><button data-act="cart" data-k="${esc(x)}" data-d="1">＋</button></div></div>`;
+  }).join('');
+  openModal(`<div class="shead"><h2>${esc(L(SHOPS[k].name))}</h2><span class="num" style="font-size:24px;color:var(--gold)">$${S.money}</span><button class="btn small ghost" data-act="close">${t('close')}</button></div>
+    <p class="muted" style="font-size:13px">${esc(L(SHOPS[k].desc))}</p>
+    <div class="grid2">${rows}</div>
+    <div class="row" style="justify-content:flex-end"><button class="btn" data-act="cartfill">${t('fill')}</button>
+      <button class="btn primary" data-act="buy" ${total === 0 || total > S.money ? 'disabled' : ''}>${t('shopBuy', total)}</button></div>
+    ${total > S.money ? `<p class="bad">${t('notEnough')}</p>` : ''}`);
+}
+let wsTab = 'tools';
+function showWorkshop(){
+  const tierChip = lv => `<span class="tierchip" style="background:${TOOL_TIERS[lv - 1].l}">${esc(L(TOOL_TIERS[lv - 1].name))}</span>`;
+  let body = '';
+  if (wsTab === 'tools') body = TOOLS.map(m => {
+    const lv = S.tools[m], dishes = unlocked().filter(i => DISHES[i].m === m).map(dName).join('、') || '—';
+    const nx = lv < 5 ? `<img src="${ART.toolIcon(m, lv + 1)}" alt="" style="width:32px;height:32px;opacity:.85">` : '';
+    return `<div class="item"><img src="${ART.toolIcon(m, lv)}" alt=""><div class="grow"><b>${esc(L(METHODS[m].name))} ${tierChip(lv)}</b>
+      <small>${t('toolEff', ((lv - 1) * 4).toFixed(0), ((lv - 1) * 12).toFixed(0), warmTime(m).toFixed(1), toolBonus(m))}<br>${esc(t('usedBy', dishes))}</small></div>${nx}
+      ${lv < 5 ? `<button class="btn small ${S.money >= TOOL_COST[lv] ? 'primary' : ''}" data-act="uptool" data-k="${m}" ${S.money < TOOL_COST[lv] ? 'disabled' : ''}>${t('upgrade', TOOL_COST[lv])}</button>` : `<span class="good" style="font-size:12px">${t('maxed')}</span>`}</div>`;
+  }).join('');
+  else if (wsTab === 'shop') body = SHOP_LV.map((s, i) => `<div class="item"><img class="wide" src="${ART.stallPreview(i + 1)}" alt="">
+      <div class="grow"><b>${esc(L(s.name))}</b><small>${t('shopLv', i + 1, s.seats, s.rent)}</small></div>
+      ${i + 1 <= S.shop ? `<span class="good" style="font-size:12px">${t('owned')}</span>` : i === S.shop ? `<button class="btn small primary" data-act="upshop" ${S.money < s.cost ? 'disabled' : ''}>${t('upgrade', s.cost)}</button>` : `<span class="muted">$${s.cost}</span>`}</div>`).join('');
+  else body = Object.entries(GEAR).map(([k, g]) => { const lv = S.gear[k];
+    return `<div class="item"><div class="grow"><b>${esc(L(g.name))} ${g.max > 1 ? `Lv ${lv}/${g.max}` : ''}</b><small>${esc(L(g.desc))}</small></div>
+      ${lv >= g.max ? `<span class="good" style="font-size:12px">${t(g.max > 1 ? 'maxed' : 'owned')}</span>` : `<button class="btn small" data-act="upgear" data-k="${k}" ${S.money < g.cost[lv] ? 'disabled' : ''}>${t('buyFor', g.cost[lv])}</button>`}</div>`; }).join('');
+  openModal(`<div class="shead"><h2>${esc(L(SHOPS.workshop.name))}</h2><span class="num" style="font-size:24px;color:var(--gold)">$${S.money}</span><button class="btn small ghost" data-act="close">${t('close')}</button></div>
+    <div class="tabs">${['tools','shop','gear'].map(k => `<button class="btn small ${wsTab === k ? 'on' : ''}" data-act="wstab" data-k="${k}">${t(k === 'tools' ? 'wsTools' : k === 'shop' ? 'wsShop' : 'wsGear')}</button>`).join('')}</div>
+    <div class="list">${body}</div>`);
+}
+function showHospital(){
+  const lines = [['小燈，攤子還好嗎？別太累了。','Tiểu Đăng, quán vẫn ổn chứ? Đừng làm quá sức nhé.'],
+    ['聽說夜市的燈籠一盞一盞亮了，外婆好開心。','Nghe nói lồng đèn chợ đêm sáng lại từng chiếc, bà vui lắm.'],
+    ['醫生說我快可以出院了。最後那幾道菜，就靠你了。','Bác sĩ bảo bà sắp được xuất viện rồi. Mấy món cuối trông cả vào cháu.']];
+  const g = SPECIAL.grandma, b = bills(), line = S.ended ? ['我已經出院啦！','Bà xuất viện rồi!'] : lines[Math.min(2, Math.floor(cardsDone() / 5))];
+  openModal(`<div class="shead"><h2>${t('hospT')}</h2><button class="btn small ghost" data-act="close">${t('close')}</button></div>
+    <div class="row" style="align-items:flex-start;flex-wrap:nowrap">${portraitHTML(g.look, L(g.name))}<p class="dtext">「${esc(L(line))}」</p></div>
+    <div class="score"><span>${t('rent')}</span><span class="num">$${b.rent}</span><span>${t('power')}</span><span class="num">$${b.power}</span><span>${t('hospital')}</span><span class="num">$${b.hosp}</span></div>
+    <div class="total"><span>${t('billT')}</span><span class="num">$${billTotal()}</span></div>
+    <button class="btn primary" data-act="visit" ${S.visited === S.day ? 'disabled' : ''}>${S.visited === S.day ? t('visited') : t('visit')}</button>`);
+  paintPortraits($('#sheet'));
+}
+
+/* ---------- stats / album / saves ---------- */
+function showStats(){
+  const rows = Object.entries(STATS).map(([k, s]) => { let pips = ''; for (let j = 1; j <= 10; j++) pips += `<i class="${j <= S.stats[k] ? 'on' : ''}"></i>`;
+    return `<div class="stat"><b>${esc(L(s.name))} <span class="num" style="font-size:20px">${S.stats[k]}</span></b><div class="pips">${pips}</div>
+      <button class="btn small" data-act="addstat" data-k="${k}" ${S.points < 1 || S.stats[k] >= 10 ? 'disabled' : ''}>＋1</button><small>${esc(L(s.desc))}</small></div>`; }).join('');
+  openModal(`<div class="shead"><h2>${t('statT')}</h2><button class="btn small ghost" data-act="close">${t('close')}</button></div>
+    <p class="muted" style="font-size:13px">${t('statPts', S.lv, S.points)}</p><div class="list">${rows}</div>
+    <p class="muted" style="font-size:12px">${t('statInfo', patienceMax(), prepMax().toFixed(1), (7 + S.stats.heat * 1.5).toFixed(1))}</p>`);
+}
+function showAlbum(){
+  const cards = DISHES.map((d, i) => { const f = S.frags[i], done = f >= 3, seen = d.zone <= S.zone;
+    return `<button class="card ${done ? 'done' : 'lock'}" ${done ? `data-act="card" data-i="${i}"` : 'disabled'}><span class="e">${seen ? d.emoji : '？'}</span><b>${seen ? esc(dName(i)) : '？？？'}</b><small>${done ? t('unlocked') : t('fragN', f)}</small></button>`; }).join('');
+  openModal(`<div class="shead"><h2>${t('albumT', cardsDone())}</h2><button class="btn small ghost" data-act="close">${t('close')}</button></div>
+    <p class="muted" style="font-size:13px">${t('albumHint')}</p><div class="cards">${cards}</div>`);
+}
+function recipeCard(i){
+  const d = DISHES[i];
+  return `<div class="recipe"><p class="eyebrow">${t('cardNo', String(i + 1).padStart(2, '0'), esc(L(ZONES[d.zone].cuisine)))}</p>
+    <h3>${d.emoji} ${esc(dName(i))}</h3><p class="muted" style="font-size:13px">${esc(t('guest', L(d.who)))}・${esc(t('method', L(METHODS[d.m].name)))}</p>
+    <p class="quote">「${esc(L(d.memory))}」</p><p class="quote">${esc(L(d.story))}</p>
+    <p class="muted" style="font-size:13px">${esc(t('recipe', d.steps.map(ingName).join(' → ')))}</p><p class="fact">${esc(t('fact', L(d.fact)))}</p></div>`;
+}
+function showSaves(msg = ''){
+  openModal(`<div class="shead"><h2>${t('saveT')}</h2><button class="btn small ghost" data-act="close">${t('close')}</button></div>
+    <p class="muted" style="font-size:13px">${t('saveHint')}</p>
+    ${S ? `<label class="muted" for="exportBox" style="font-size:12px">${t('saveCode')}</label><textarea id="exportBox" readonly>${esc(JSON.stringify(S))}</textarea><button class="btn" data-act="copy">${t('copy')}</button>` : ''}
+    <label class="muted" for="importBox" style="font-size:12px">${t('pasteHere')}</label><textarea id="importBox" placeholder='{"v":2, ...}'></textarea>
+    <input id="importFile" type="file" accept=".json,application/json,text/plain" class="muted">
+    <button class="btn primary" data-act="import">${t('load')}</button><p id="saveMsg" class="warn" role="status">${esc(msg)}</p>`);
+  const f = $('#importFile');
+  f.addEventListener('change', () => { const file = f.files && f.files[0]; if (!file) return; const r = new FileReader(); r.onload = () => { $('#importBox').value = String(r.result || ''); }; r.readAsText(file); });
+}
+function doImport(){
+  let o = null; try { o = JSON.parse(($('#importBox').value || '').trim()); } catch (e) {}
+  const s = valid(o) ? o : migrate(o);
+  if (!s) { $('#saveMsg').textContent = t('badSave'); sfx.bad(); return; }
+  S = s; save(); N = null; closeModal(); toast(t('loaded')); sfx.ok(); showHub();
+}
+
+/* ---------- night: customers ---------- */
+const HAIRS = ['#1C1C28','#2B2420','#4A3426','#3A2A1E','#5B3A29','#8A5A3A'];
+const TOPS = ['#4FC1B0','#E2574C','#7C8BD6','#C98BB9','#E8C547','#6FA36B','#D98E48','#5A6A8A','#B04A6A'];
+const BOTS = ['#2A2F3A','#3B5BA5','#4A4560','#5A4636','#2E2A26'];
+function randomLook(){ return { skin:pick(SK), hair:pick(HAIRS), hs:pick(['short','long','bun','bob','pony','spiky','short']), top:pick(TOPS), bot:pick(BOTS),
+  hat: Math.random() < .12 ? 'cap' : undefined, acc: Math.random() < .2 ? ['glasses'] : [] }; }
+function pickDishes(n){
+  const pool = unlocked(), out = [];
+  for (let k = 0; k < n; k++) {
+    const w = pool.map(i => (DISHES[i].zone === S.zone ? 3 : 1) * (S.frags[i] < 3 ? 2 : 1));
+    let r = Math.random() * w.reduce((a, b) => a + b, 0), j = 0; while (r > w[j]) { r -= w[j]; j++; }
+    out.push(pool[Math.min(j, pool.length - 1)]);
+  }
+  return out;
+}
+function makeCustomer(i){
+  let type = 'normal', look = randomLook(), name = LANG ? 'Khách' : '客人';
+  const storyHere = N.people.some(p => p.type === 'story' && p.dish === i);
+  if (S.frags[i] < 3 && !storyHere && Math.random() < .5) { type = 'story'; look = DISHES[i].look; name = L(DISHES[i].who); }
+  else if (S.day >= 4 && Math.random() < .14) { type = Math.random() < .55 ? 'boss' : 'critic'; look = SPECIAL[type].look; name = L(SPECIAL[type].name); }
+  return { id: Math.random(), type, dish: i, look, name, x: ART.ENTRY.x, by: ART.ENTRY.by, seat: -1, state: 'in', pat: 0, max: patienceMax(), t: 0, mood: null, showDish: null, line: pick(NORMAL_LINES) };
+}
+function freeSeat(){
+  const taken = new Set(N.people.filter(p => p.seat >= 0 && p.state !== 'out').map(p => p.seat));
+  const list = ART.SEATS[S.shop - 1].map((s, k) => k).filter(k => !taken.has(k));
+  return list.length ? pick(list) : -1;
+}
+function spawn(p, seat){ p.seat = seat; const s = ART.SEATS[S.shop - 1][seat]; p.tx = s.x; p.tby = s.by; N.people.push(p); N.spawned++; sfx.door(); }
+function goOut(p, mood){ p.state = 'out'; p.seat = -1; p.mood = mood; p.showDish = null; p.tx = ART.EXIT_X; p.tby = ART.ENTRY.by; }
+function moveTo(p, dt){
+  const dx = p.tx - p.x, dy = p.tby - p.by, d = Math.hypot(dx, dy), sp = 55 * dt;
+  if (d <= sp) { p.x = p.tx; p.by = p.tby; return true; }
+  p.x += dx / d * sp; p.by += dy / d * sp; p.flip = dx < 0; return false;
+}
+function personView(p){
+  const seated = ['wait','order','eat'].includes(p.state) && p.seat >= 0;
+  return { x: Math.round(p.x), by: Math.round(p.by), look: p.look, walk: ['in','out','stand'].includes(p.state) && !p.arrived, seated,
+    mood: p.state === 'wait' ? 'wait' : p.mood, flip: seated ? ART.SEATS[S.shop - 1][p.seat].flip : p.flip, eat: p.state === 'eat', dish: p.showDish, alpha: p.look.ghost ? .7 : 1 };
+}
+function sceneState(){
+  const ok = !!S;
+  return { lv: ok ? S.shop : 1, sign: ok ? S.gear.sign : 0, fan: ok ? S.gear.fan : 0, lit: ok ? cardsDone() : 3, open: view === 'night' || view === 'title',
+    dark: !!(N && N.dark), candles: !!(N && N.candles), cooking: N && N.c && ['warm','heat'].includes(N.phase) ? DISHES[N.c.i].m : null,
+    tools: ok ? S.tools : { wok:1, pan:1, pot:1, grill:1, fryer:1, steamer:1 }, people: N ? N.people.map(personView) : AMB.map(personView) };
+}
+// a few ambient walkers on the title screen
+const AMB = [];
+function ambient(dt){
+  if (AMB.length < 3 && Math.random() < dt * .4) { const l = Math.random() < .5; AMB.push({ look: randomLook(), x: l ? -14 : 494, by: 244 + rnd(14), tx: l ? 494 : -14, tby: 0, state: 'out', seat: -1, mood: null }); AMB[AMB.length - 1].tby = AMB[AMB.length - 1].by; }
+  for (const p of AMB) if (moveTo(p, dt * .6)) p.done = 1;
+  for (let k = AMB.length - 1; k >= 0; k--) if (AMB[k].done) AMB.splice(k, 1);
+}
+
+/* ---------- night: open / simulate ---------- */
+function openStall(){
+  const n = customersTonight();
+  N = { people: [], queue: pickDishes(n), spawned: 0, spawnT: 1, phase: 'idle', c: null, active: null, secret: 1, dark: false, candles: false, reason: '', stopSpawn: false,
+    event: null, eventAt: 99, evDone: false, ev: null,
+    log: { income: 0, tips: 0, perfect: 0, normal: 0, fail: 0, left: 0, frags: 0, cards: [], repStart: S.rep, lvStart: S.lv, best: -1 } };
+  if (S.day >= 3 && Math.random() < .32) {
+    const opts = ['gang']; if (S.day >= 4) opts.push('blackout'); if (S.day >= 5) opts.push('ghost', 'ghost');
+    N.event = pick(opts); N.eventAt = 1 + rnd(Math.max(1, n - 2)) + 1;
+  }
+  sfx.ok(); go('night'); renderNightUI();
+}
+function simNight(dt){
+  const n = N, frozen = n.phase === 'event' || n.phase === 'evout';
+  if (!n.stopSpawn && n.queue.length && !frozen && n.phase !== 'result') {
+    n.spawnT -= dt;
+    if (n.spawnT <= 0) { const s = freeSeat(); if (s >= 0) { spawn(makeCustomer(n.queue.shift()), s); n.spawnT = 5 + Math.random() * 4; } else n.spawnT = 1.2; }
+  }
+  let dockDirty = false;
+  for (const p of n.people) {
+    p.t += dt;
+    if (p.state === 'in') { if (moveTo(p, dt)) { p.state = 'wait'; p.pat = p.max; dockDirty = true; } }
+    else if (p.state === 'out') moveTo(p, dt);
+    else if (p.state === 'stand') p.arrived = moveTo(p, dt);
+    else if (p.state === 'wait') { if (!frozen) p.pat -= dt * .5; if (p.pat <= 0) { leaveAngry(p); dockDirty = true; } }
+    else if (p.state === 'order') { if (['guess','order','prep','warm','heat'].includes(n.phase)) p.pat -= dt; if (p.pat <= 0) activeTimeout(); }
+    else if (p.state === 'eat') { p.eatT -= dt; if (p.eatT <= 0) goOut(p, 'happy'); }
+  }
+  n.people = n.people.filter(p => !(p.state === 'out' && Math.abs(p.x - ART.EXIT_X) < 1));
+  if (dockDirty && n.phase === 'idle') renderDock();
+  if (n.phase === 'prep') { n.c.prep -= dt; if (n.c.prep <= 0) { toast(t('timeUp')); startWarm(); } }
+  else if (n.phase === 'warm') { n.c.warm -= dt; if (n.c.warm <= 0) startHeat(); }
+  else if (n.phase === 'heat') stepPointer(dt);
+  if (n.event && !n.evDone && n.spawned >= n.eventAt && n.phase === 'idle') startEvent();
+  if (n.phase === 'idle' && !n.stopSpawn && S.stamina < 12) {
+    n.stopSpawn = true; n.queue = []; n.reason = t('staminaOut');
+    n.people.forEach(p => { if (p.state === 'wait' || p.state === 'in') goOut(p, null); }); renderDock();
+  }
+  if (n.phase === 'idle' && !n.queue.length && !n.people.length) endNight(n.reason || t('allServed'));
+}
+function leaveAngry(p, msg){
+  goOut(p, 'angry'); S.rep = clamp(S.rep - .4, 1, 5); N.log.left++; sfx.bad(); renderHud();
+  floatText(t('leftRep'), p.x, p.by - 26, 'var(--red)'); if (msg) toast(msg);
+}
+function activeTimeout(){
+  const p = N.active; N.active = null; N.c = null; N.phase = 'idle';
+  if (p.type === 'gang' || p.type === 'ghost') { evOutcome(p.type === 'gang' ? 'feedBad' : 'ghostBad'); return; }
+  leaveAngry(p, t('leftAngry')); renderNightUI();
+}
+
+/* ---------- night: ordering ---------- */
+function beginOrder(p){
+  if (!N || N.phase !== 'idle' || p.state !== 'wait') return;
+  N.active = p; p.state = 'order'; p.mood = null; sfx.tap();
+  if (p.type === 'story') {
+    const others = shuffle(unlocked().filter(j => j !== p.dish));
+    let wrong = others.slice(0, 2);
+    if (wrong.length < 2) wrong = wrong.concat(shuffle(DISHES.map((d, j) => j).filter(j => j !== p.dish && !wrong.includes(j) && DISHES[j].zone <= Math.max(1, S.zone))).slice(0, 2 - wrong.length));
+    if (S.stats.memory >= 4) wrong = wrong.slice(0, 1);
+    p.options = shuffle([p.dish, ...wrong]); p.struck = [];
+    N.phase = 'guess';
+  } else N.phase = 'order';
+  renderNightUI();
+}
+function onGuess(j){
+  const p = N.active;
+  if (j !== p.dish) { sfx.bad(); p.struck.push(j); p.pat -= p.max * .25; toast(L(['「不是這個味道……」','"Không phải vị này..."'])); renderNightUI(); return; }
+  confirmCook();
+}
+function confirmCook(){
+  const p = N.active, i = p.dish, miss = lacking(i);
+  if (miss.length) { N.active = null; N.phase = 'idle';
+    if (p.type === 'gang' || p.type === 'ghost') return evOutcome(p.type === 'gang' ? 'feedBad' : 'ghostBad');
+    leaveAngry(p, t('noIng', miss.map(ingName).join('、'))); return renderNightUI(); }
+  DISHES[i].steps.forEach(take);
+  let noSeason = !take('鹽'); if (DISHES[i].sweet && !take('糖')) noSeason = true;
+  S.stamina = Math.max(0, S.stamina - 12);
+  N.c = { i, m: DISHES[i].m, noSeason }; sfx.ok(); renderHud(); startPrep();
+}
+
+/* ---------- night: cooking minigames ---------- */
+function startPrep(){
+  const c = N.c, d = DISHES[c.i];
+  c.pool = shuffle(d.steps.concat(shuffle(Object.keys(ING).filter(s => !d.steps.includes(s) && !ING[s].seas)).slice(0, 4)));
+  c.step = 0; c.mistakes = 0; c.correct = 0; c.pmax = prepMax(); c.prep = c.pmax;
+  N.phase = 'prep'; renderNightUI();
+}
+function onIng(s, el){
+  const c = N.c, d = DISHES[c.i];
+  if (s === d.steps[c.step]) { c.step++; c.correct++; sfx.tap(); if (c.step >= 4) return startWarm(); renderNightUI(); }
+  else { c.mistakes++; sfx.bad(); if (el) { el.classList.remove('shake'); void el.offsetWidth; el.classList.add('shake'); }
+    const m = $('#misses'); if (m) m.textContent = t('miss', c.mistakes); }
+}
+function startWarm(){ const c = N.c; c.warm = c.wmax = warmTime(c.m); c.pos = 0; N.phase = 'warm'; sfx.cook(c.m); renderNightUI(); }
+function startHeat(){
+  const c = N.c, w = zoneW(c.m), mo = METHODS[c.m].motion;
+  c.zw = w; c.motion = mo; c.speed = ptrSpeed(c.m, DISHES[c.i].zone); c.pos = 0; c.dir = 1; c.acc = 0;
+  c.zc0 = mo === 'fill' ? 45 + w / 2 + Math.random() * Math.max(0, 40 - w) : 10 + w / 2 + Math.random() * (80 - w);
+  c.zc = c.zc0; N.phase = 'heat'; renderNightUI();
+}
+function stepPointer(dt){
+  const c = N.c, sp = c.speed;
+  if (c.motion === 'fill') { c.pos += sp * (.5 + c.pos / 120) * dt; if (c.pos >= 100) { c.pos = 100; c.burnt = true; return onStop(); } return; }
+  if (c.motion === 'pulse') { c.acc += dt; if (c.acc < .2) return; c.pos += c.dir * sp * c.acc; c.acc = 0; }
+  else if (c.motion === 'drift') c.pos += (c.dir * sp * .65 + Math.sin(T * 3.3) * sp * .55) * dt;
+  else c.pos += c.dir * sp * dt;
+  if (c.motion === 'flare') c.zc = clamp(c.zc0 + Math.sin(T * 1.6) * 12, c.zw / 2 + 2, 98 - c.zw / 2);
+  if (c.pos >= 100) { c.pos = 100; c.dir = -1; } if (c.pos <= 0) { c.pos = 0; c.dir = 1; }
+}
+function onStop(){
+  const c = N.c, p = N.active, dd = Math.abs(c.pos - c.zc), g = c.zw / 2;
+  const heat = c.burnt ? 0 : dd <= g ? 30 : dd <= g + 8 ? 15 : 0;
+  const ing = Math.round(50 * c.correct / (4 + c.mistakes));
+  const speed = Math.round(20 * clamp(p.pat / p.max, 0, 1));
+  const total = Math.max(0, ing + heat + speed - (c.noSeason ? 15 : 0));
+  const tier = total >= 80 ? 1 : total >= 50 ? 2 : 3;
+  const bonus = toolBonus(c.m), rank = tier < 3 ? rankOf(total + bonus) : null;
+  c.res = { ing, heat, speed, total, tier, bonus, rank, hl: heat === 30 ? 0 : heat === 15 ? 1 : 2 };
+  tier === 1 ? sfx.perfect() : tier === 2 ? sfx.ok() : sfx.bad(); sfx.cook(c.m);
+  if (c.noSeason) toast(t('noSalt'));
+  N.phase = 'result'; renderNightUI();
+}
+function onRedo(){ N.secret--; const p = N.active; p.pat = Math.max(p.pat, p.max * .6); toast(t('redoToast')); startPrep(); }
+function addExp(n){
+  S.exp += n;
+  while (S.exp >= expNeed(S.lv)) { S.exp -= expNeed(S.lv); S.lv++; S.points += 2; toast(t('lvUp', S.lv)); sfx.lantern(); }
+}
+function onServe(){
+  const p = N.active, c = N.c, r = c.res, i = c.i, z = DISHES[i].zone;
+  const mult = r.rank ? r.rank.mult : 0, price = Math.round(dishPrice(i) * mult);
+  let got = 0, card = -1; S.served++;
+  if (r.rank) N.log.best = Math.max(N.log.best, RANKS.length - 1 - RANKS.indexOf(r.rank));
+  if (p.type === 'gang' || p.type === 'ghost') {
+    N.active = null; N.c = null; N.phase = 'idle';
+    if (r.tier < 3) { p.state = 'eat'; p.eatT = 3; p.showDish = DISHES[i].emoji; }
+    evOutcome(p.type === 'gang' ? (r.tier < 3 ? 'feedOk' : 'feedBad') : (r.tier < 3 ? 'ghostOk' : 'ghostBad')); return;
+  }
+  if (r.tier === 3) { S.rep = clamp(S.rep - .4, 1, 5); N.log.fail++; addExp(5); if (p.type === 'critic') S.rep = clamp(S.rep - .6, 1, 5); goOut(p, 'angry'); }
+  else {
+    got = price; N.log[r.tier === 1 ? 'perfect' : 'normal']++; addExp((r.tier === 1 ? 30 : 15) + z * 5);
+    if (r.tier === 1) { const tip = 10 + S.stats.charm * 5; got += tip; N.log.tips += tip; }
+    if (p.type === 'boss') {
+      if (['SR','SSR','UR'].includes(r.rank.id)) { const bonus = price * 2 + 200; got += bonus; N.log.tips += bonus; S.rep = clamp(S.rep + .3, 1, 5); toast(t('bossOk')); }
+      else { S.rep = clamp(S.rep - .6, 1, 5); toast(t('bossBad')); }
+    } else if (p.type === 'critic') {
+      const id = r.rank.id, dr = id === 'SSR' || id === 'UR' ? 1 : id === 'SR' ? .3 : -.5;
+      S.rep = clamp(S.rep + dr, 1, 5); toast(t(dr > .5 ? 'criticGood' : dr > 0 ? 'criticMeh' : 'criticBad'));
+    } else S.rep = clamp(S.rep + (r.tier === 1 ? (p.type === 'story' ? .3 : .15) : 0), 1, 5);
+    if (p.type === 'story' && r.tier === 1 && S.frags[i] < 3) { S.frags[i]++; N.log.frags++; if (S.frags[i] === 3) { card = i; N.log.cards.push(i); } }
+    S.money += got; N.log.income += got; p.state = 'eat'; p.eatT = 3.5; p.showDish = DISHES[i].emoji; p.mood = 'happy';
+    floatText('+$' + got, p.x, p.by - 24); sfx.coin();
+  }
+  N.active = null; N.c = null; N.phase = 'idle'; renderHud();
+  if (card >= 0) { sfx.lantern(); openModal(`<div class="shead"><h2>${t('lantern', cardsDone())}</h2></div>${lanterns(cardsDone())}${recipeCard(card)}<button class="btn primary" data-act="close">${t('keepGoing')}</button>`, renderNightUI); }
+  else renderNightUI();
+}
+
+/* ---------- night: events ---------- */
+function startEvent(){
+  const n = N, k = n.event; n.evDone = true; n.phase = 'event';
+  n.ev = { k, amt: Math.round((300 + S.day * 15) / 10) * 10, people: [] };
+  if (k === 'gang') {
+    [['gang', 300, 232], ['gang2', 318, 240]].forEach(([s, x, y]) => { const p = { id: Math.random(), type: 'gangX', look: SPECIAL[s].look, name: L(SPECIAL[s].name), x: ART.ENTRY.x, by: ART.ENTRY.by, tx: x, tby: y, seat: -1, state: 'stand', t: 0, mood: 'angry' }; n.people.push(p); n.ev.people.push(p); });
+    sfx.thud();
+  } else if (k === 'ghost') {
+    const s = freeSeat(), p = { id: Math.random(), type: 'ghostX', look: SPECIAL.ghost.look, name: L(SPECIAL.ghost.name), x: 250, by: 232, tx: 250, tby: 232, seat: -1, state: 'stand', t: 0 };
+    if (s >= 0) { const st = ART.SEATS[S.shop - 1][s]; Object.assign(p, { seat: s, x: st.x, by: st.by, state: 'wait', pat: 999, max: 999 }); }
+    n.people.push(p); n.ev.people.push(p); sfx.ghost();
+  } else { n.dark = true; sfx.thud(); }
+  renderNightUI();
+}
+function evChoice(k){
+  const ev = N.ev, D = ev.amt;
+  const payOr = amt => { if (S.money >= amt) { S.money -= amt; return true; } smash(); return false; };
+  if (k === 'pay') { S.money -= D; evOutcome('pay'); }
+  else if (k === 'haggle') { if (Math.random() < .25 + S.stats.charm * .07) evOutcome(payOr(Math.ceil(D / 2)) ? 'haggleOk' : 'smash'); else evOutcome(payOr(Math.round(D * 1.5)) ? 'haggleBad' : 'smash'); }
+  else if (k === 'police') { if (Math.random() < .5) { S.rep = clamp(S.rep + .3, 1, 5); evOutcome('policeOk'); } else { S.money -= Math.min(S.money, Math.round(D * .3)); evOutcome('policeBad'); } }
+  else if (k === 'feed' || k === 'ghostfeed') {
+    const pool = unlocked().filter(i => !lacking(i).length), i = pool.length ? pick(pool) : pick(unlocked());
+    const host = ev.people[0]; host.type = k === 'feed' ? 'gang' : 'ghost'; host.dish = i; host.max = patienceMax(); host.pat = host.max; host.state = 'order';
+    N.active = host; N.phase = 'order'; renderNightUI(); return;
+  }
+  else if (k === 'salt') { for (let u = 0; u < 3; u++) take('鹽'); evOutcome('salt'); }
+  else if (k === 'ignore') evOutcome(Math.random() < .5 ? 'ignoreOk' : 'ignoreBad');
+  else if (k === 'candle') { S.money -= 60; N.candles = true; N.queue.push(...pickDishes(2)); evOutcome('candle'); }
+  else if (k === 'closeup') evOutcome('closeup');
+}
+function smash(){ Object.keys(S.inv).forEach(k => { if (ING[k].f) S.inv[k] = []; }); S.rep = clamp(S.rep - .3, 1, 5); sfx.thud(); }
+function evOutcome(o){
+  const ev = N.ev, D = ev.amt;
+  if (o === 'feedBad') { if (S.money >= Math.round(D * 1.5)) S.money -= Math.round(D * 1.5); else { smash(); o = 'smash'; } }
+  if (o === 'feedOk') S.rep = clamp(S.rep + .2, 1, 5);
+  if (o === 'ghostOk') { S.money += 300; S.rep = clamp(S.rep + .5, 1, 5); floatText('+$300', 250, 200); sfx.lantern(); }
+  if (o === 'ghostBad' || o === 'ignoreBad') { S.rep = clamp(S.rep - .3, 1, 5); N.people.forEach(p => { if (p.state === 'wait') goOut(p, 'angry'); }); }
+  if (o === 'closeup') { N.queue = []; N.stopSpawn = true; N.reason = t('closedEarly'); N.people.forEach(p => { if (p.state === 'wait' || p.state === 'in') goOut(p, null); }); }
+  ev.out = o; N.phase = 'evout'; N.c = null; N.active = null; renderHud(); renderNightUI();
+}
+function evDone(){
+  const ev = N.ev;
+  ev.people.forEach(p => { if (p.state !== 'eat') goOut(p, ev.out === 'feedOk' || ev.out === 'ghostOk' ? 'happy' : null); else { p.eatT = Math.min(p.eatT, 2); } });
+  if (ev.k === 'blackout' && ev.out === 'closeup') N.dark = true;
+  N.phase = 'idle'; renderNightUI();
+}
+
+/* ---------- night: UI ---------- */
+function patBar(p){ return `<div class="pat"><span>${t('patience')}</span><div class="bar"><i id="patbar"></i></div><span id="patnum" class="num" style="font-size:16px">${Math.ceil(p.pat)}</span></div>`; }
+function renderNightUI(){
+  if (view !== 'night' || !N) return;
+  redraw = renderNightUI; renderDock();
+  const n = N, p = n.active; let h = '';
+  if (n.phase === 'idle') {
+    const waiting = n.people.filter(q => q.state === 'wait').length;
+    h = `<div class="tip frame">${waiting ? t('tapCustomer') : `<b>${esc(L(SHOP_LV[S.shop - 1].name))}</b>`} ・ ${n.queue.length + n.people.filter(q => q.state === 'in').length + waiting} 🙋${n.secret ? ` ・ ${t('secretLeft', n.secret)}` : ''}</div>`;
+  } else if (n.phase === 'guess' || n.phase === 'order') {
+    const d = DISHES[p.dish];
+    let text, act;
+    if (n.phase === 'guess') {
+      text = `「${esc(L(d.memory))}」`;
+      act = `<p class="muted" style="font-size:12px">${S.stats.memory >= 2 ? esc(t('clue', L(ZONES[d.zone].cuisine))) : t('guessQ')}</p><div class="opts">${p.options.map(j =>
+        `<button class="opt ${p.struck.includes(j) ? 'no' : ''} ${lacking(j).length ? 'lack' : ''}" data-act="guess" data-i="${j}"><span class="e">${DISHES[j].emoji}</span><span>${esc(dName(j))}<small>${t('stockN', servings(j))}</small></span></button>`).join('')}</div>`;
+    } else {
+      const lines = { normal: L(p.line) + ' ' + t('order', dName(p.dish)), boss: t('vipBoss', dName(p.dish)), critic: t('vipCritic', dName(p.dish)),
+        gang: L(['「先煮一碗{0}來，吃得爽再說。」','"Nấu tao bát {0} trước đã, ăn sướng rồi tính."']).replace('{0}', dName(p.dish)),
+        ghost: L(['「……{0}……好冷……」','"...{0}... lạnh quá..."']).replace('{0}', dName(p.dish)) };
+      text = esc(lines[p.type] || lines.normal);
+      const miss = lacking(p.dish);
+      act = `<div class="row">${p.type === 'boss' ? `<span class="warn" style="font-size:13px">${t('rankNeed', 'SR')}</span>` : ''}
+        ${miss.length ? `<span class="bad" style="font-size:13px">${esc(miss.map(ingName).join('、'))} ✕</span>` : ''}<span style="flex:1"></span>
+        <button class="btn primary" data-act="cookit">${DISHES[p.dish].emoji} ${t('cookIt')} ・ ${esc(L(METHODS[d.m].name))}</button></div>`;
+    }
+    const tag = p.type === 'story' ? `<span class="tag story">STORY</span>` : p.type === 'boss' || p.type === 'critic' ? `<span class="tag vip">VIP</span>` : p.type === 'gang' || p.type === 'ghost' ? `<span class="tag ev">EVENT</span>` : '';
+    h = `<div class="dlg frame ${p.type === 'story' || tag ? 'gold' : ''}">${portraitHTML(p.look, p.name)}<div class="dbody">
+      <p class="dtext"><span class="who">${esc(p.name)}${tag}</span>${text}</p>${act}${patBar(p)}</div></div>`;
+  } else if (['prep','warm','heat','result'].includes(n.phase)) h = cookPanel();
+  else if (n.phase === 'event') {
+    const ev = EVENTS[n.ev.k], who = ev.who ? SPECIAL[ev.who] : null, D = n.ev.amt;
+    const dis = k => (k === 'pay' && S.money < D) || (k === 'salt' && have('鹽') < 3) || (k === 'candle' && S.money < 60);
+    h = `<div class="dlg frame gold">${who ? portraitHTML(who.look, L(who.name)) : ''}<div class="dbody">
+      <p class="dtext"><span class="who">${who ? esc(L(who.name)) : '⚡'}<span class="tag ev">EVENT</span></span>${esc(L(ev.text).replace('{0}', D))}</p>
+      <div class="opts">${ev.choices.map(([k, lab]) => `<button class="opt" data-act="ev" data-k="${k}" ${dis(k) ? 'disabled style="opacity:.35"' : ''}><span>${esc(L(lab).replace('{0}', D))}</span></button>`).join('')}</div></div></div>`;
+  } else if (n.phase === 'evout') {
+    const o = n.ev.out, good = ['pay','haggleOk','feedOk','policeOk','ghostOk','salt','ignoreOk','candle','closeup'].includes(o);
+    h = `<div class="dlg frame"><div class="dbody"><p class="tier ${good ? 't1' : 't3'}">${esc(L(EV_OUT[o]))}</p>
+      <div class="row" style="justify-content:flex-end"><button class="btn primary" data-act="evdone">${t('confirm')}</button></div></div></div>`;
+  }
+  layer.innerHTML = h; paintPortraits();
+  N.cv = layer.querySelector('#cookcv'); if (N.cv) N.cv.getContext('2d').imageSmoothingEnabled = false;
+  updateBars();
+}
+function cookPanel(){
+  const n = N, c = n.c, d = DISHES[c.i], lv = S.tools[c.m], tier = TOOL_TIERS[lv - 1];
+  let side = '';
+  if (n.phase === 'prep') {
+    const hints = Math.min(4, S.stats.memory - 1);
+    side = `<div class="row"><b>${t('prepT')}</b><span class="muted" id="misses" style="margin-left:auto;font-size:13px">${t('miss', c.mistakes)}</span></div>
+      <p class="muted" style="font-size:12px">${t('prepHint')} ${hints > 0 ? t('prepGlow') : ''}</p>
+      <div class="timer"><i id="prepbar"></i></div>
+      <div class="slots">${d.steps.map((s, k) => `<div class="slot ${k < c.step ? 'done' : ''}">${k < c.step ? ING[s].e : ''}</div>`).join('')}</div>
+      <div class="ings">${c.pool.map(s => { const used = d.steps.indexOf(s) > -1 && d.steps.indexOf(s) < c.step, glow = !used && c.step < hints && s === d.steps[c.step];
+        return `<button class="ing ${used ? 'used' : ''} ${glow ? 'glow' : ''}" data-act="ing" data-s="${esc(s)}"><span class="e">${ING[s].e}</span>${esc(ingName(s))}</button>`; }).join('')}</div>`;
+  } else if (n.phase === 'warm') {
+    side = `<p class="tier t2">${t('heating')}</p><p class="muted" style="font-size:13px">${esc(L(METHODS[c.m].verb))}</p><div class="timer"><i id="warmbar"></i></div>`;
+  } else if (n.phase === 'heat') {
+    const fill = c.motion === 'fill';
+    side = `<div class="row"><b>${esc(L(METHODS[c.m].verb))}</b><span class="muted" style="margin-left:auto;font-size:13px">${t('zoneW', c.zw.toFixed(0))}</span></div>
+      <div class="heat" style="height:${26 + lv * 9}px"><div class="zy" id="zy"></div><div class="zg" id="zg"></div>${fill ? '<div class="burn"></div>' : ''}<div class="ptr" id="ptr"></div></div>
+      <div class="legend"><span style="--c:var(--jade)">${t('perfect')}</span><span style="--c:rgba(242,163,58,.6)">${t('good')}</span><span style="--c:#0B0D18">${t('fail0')}</span></div>
+      <button class="btn primary big" data-act="stop" style="font-size:22px">${esc(L(METHODS[c.m].stop))}</button>
+      <p class="muted" style="font-size:11px;text-align:center">Space / Enter</p>`;
+  } else {
+    const r = c.res, p = n.active;
+    const fragLine = p.type === 'story' && r.tier === 1 ? `<p class="good" style="font-size:13px">${S.frags[c.i] < 3 ? t('frag', S.frags[c.i] + 1) : t('fragFull')}</p>` : '';
+    side = `<div class="rankbox">${r.rank ? `<span class="rank ${r.rank.id}" style="color:${r.rank.c}">${r.rank.id}</span>` : ''}<p class="tier t${r.tier}">${t('tier' + r.tier)}</p></div>
+      <div class="score"><span>${t('sIng')}</span><span class="num">${r.ing}/50</span><span>${t('sHeat')}（${L(STR.hLabel)[r.hl]}）</span><span class="num">${r.heat}/30</span>
+        <span>${t('sSpeed')}</span><span class="num">${r.speed}/20</span>${c.noSeason ? `<span class="bad">🧂</span><span class="num bad">-15</span>` : ''}<span>${t('sBonus')}</span><span class="num">+${r.bonus}</span></div>
+      <div class="total"><span>${t('sTotal')} → ${t('sQual')} ${r.total + r.bonus}</span><span class="num">${r.total}</span></div>${fragLine}
+      <div class="row" style="justify-content:flex-end">${r.tier > 1 && n.secret > 0 && p.type !== 'gang' && p.type !== 'ghost' ? `<button class="btn" data-act="redo">${t('redo')}</button>` : ''}
+        <button class="btn primary big" data-act="serve">${t('serve')}</button></div>`;
+  }
+  const p = n.active;
+  return `<div class="cook frame gold"><div class="chead"><span style="font-size:34px">${d.emoji}</span><div class="grow"><h3>${esc(dName(c.i))}</h3>
+      <span class="muted" style="font-size:12px">${esc(p.name)}</span></div>${n.phase !== 'result' ? `<div style="width:220px">${patBar(p)}</div>` : ''}</div>
+    <div class="cmain"><div class="cview"><canvas id="cookcv" width="160" height="90"></canvas>
+      <div class="toolname"><span>${METHODS[c.m].icon} ${esc(L(METHODS[c.m].name))} <span class="tierchip" style="background:${tier.l}">${esc(L(tier.name))}</span></span><span>Lv ${lv}/5</span></div></div>
+      <div class="cside">${side}</div></div></div>`;
+}
+function updateBars(){
+  if (!N) return;
+  const p = N.active, c = N.c;
+  if (p) { const pb = $('#patbar'), pn = $('#patnum');
+    if (pb) { const r = clamp(p.pat / p.max, 0, 1); pb.style.width = (r * 100) + '%'; pb.style.background = r < .3 ? 'var(--red)' : r < .6 ? 'var(--lantern)' : 'var(--jade)'; }
+    if (pn) pn.textContent = Math.max(0, Math.ceil(p.pat)); }
+  if (!c) return;
+  const pr = $('#prepbar'); if (pr) pr.style.width = clamp(c.prep / c.pmax, 0, 1) * 100 + '%';
+  const wb = $('#warmbar'); if (wb) wb.style.width = (1 - clamp(c.warm / c.wmax, 0, 1)) * 100 + '%';
+  const ptr = $('#ptr'); if (ptr) ptr.style.left = c.pos + '%';
+  const zg = $('#zg'), zy = $('#zy');
+  if (zg) { zg.style.left = (c.zc - c.zw / 2) + '%'; zg.style.width = c.zw + '%'; }
+  if (zy) { zy.style.left = (c.zc - c.zw / 2 - 8) + '%'; zy.style.width = (c.zw + 16) + '%'; }
+}
+
+/* ---------- night end, bills, game over ---------- */
+function endNight(reason){
+  const fresh = freshDays(); let spoiled = 0;
+  for (const k of Object.keys(S.inv)) { if (!ING[k].f) continue; const b = S.inv[k].length; S.inv[k] = S.inv[k].filter(d => S.day - d + 1 < fresh); spoiled += b - S.inv[k].length; }
+  S.zoneNights++;
+  let newZone = -1;
+  if (S.zone < 4 && S.zoneNights >= 3 && S.rep >= 3 && zoneDone(S.zone)) { S.zone++; S.zoneNights = 0; newZone = S.zone; }
+  const ending = !S.ended && cardsDone() === 15, L0 = N.log, day = S.day;
+  pendingBill = weekday() === 6;
+  S.day++; S.stamina = staminaMax(); save(); N = null;
+  const draw = () => {
+    go('summary'); redraw = draw;
+    const repDiff = S.rep - L0.repStart;
+    layer.innerHTML = `<div class="full"><div class="summary frame gold"><p class="eyebrow">${t('sumT', day)}</p><h2 style="font-size:24px">${esc(reason)}</h2>
+      <div class="score"><span>${t('sPerfect')}</span><span class="num">${L0.perfect}</span><span>${t('sNormal')}</span><span class="num">${L0.normal}</span>
+        <span>${t('sFail')}</span><span class="num">${L0.fail + L0.left}</span><span>${t('sIncome')}</span><span class="num">$${L0.income}</span>
+        <span>${t('sRep')}</span><span class="num">${repDiff >= 0 ? '+' : ''}${repDiff.toFixed(1)}</span><span>${t('sFrag')}</span><span class="num">+${L0.frags}</span>
+        <span>${t('sSpoil')}</span><span class="num">${spoiled}</span><span>${t('sBest')}</span><span class="num">${L0.best >= 0 ? RANKS[RANKS.length - 1 - L0.best].id : '—'}</span></div>
+      ${L0.cards.length ? `<p>${esc(t('litTonight', L0.cards.map(dName).join('、')))}</p>` : ''}
+      ${newZone > 0 ? `<p class="warn">${esc(t('newZone', L(ZONES[newZone].name)))}</p>` : ''}
+      ${S.lv > L0.lvStart ? `<p class="warn">${t('lvNote')}</p>` : ''}<p class="muted" style="font-size:12px">${t('autoSaved')}</p>
+      <button class="btn primary big" data-act="${ending ? 'ending' : 'aftersum'}">${ending ? t('endingBtn') : t('goHome')}</button></div></div>`;
+  };
+  draw();
+}
+function afterSummary(){ if (pendingBill) showBills(); else showHub(); }
+function showBills(){
+  go('summary'); redraw = showBills;
+  const b = bills(), tot = billTotal(), ok = S.money >= tot;
+  layer.innerHTML = `<div class="full"><div class="summary frame gold"><p class="eyebrow">${t('billT')}</p><h2>${t('day', S.day - 1)}・${L(STR.wd)[6]}</h2>
+    <div class="score"><span>${t('rent')}（${esc(L(SHOP_LV[S.shop - 1].name))}）</span><span class="num">$${b.rent}</span><span>${t('power')}</span><span class="num">$${b.power}</span>
+      <span>${t('hospital')}</span><span class="num">$${b.hosp}</span></div>
+    <div class="total"><span>${t('total')}</span><span class="num">$${tot}</span></div>
+    <p class="${ok ? 'muted' : 'bad'}">${ok ? t('afterPay', S.money - tot) : t('overMsg')}</p>
+    <button class="btn ${ok ? 'primary' : 'danger'} big" data-act="${ok ? 'paybill' : 'gameover'}">${ok ? t('pay') : t('confirm')}</button></div></div>`;
+}
+function payBill(){ S.money -= billTotal(); pendingBill = false; save(); sfx.coin(); showHub(); }
+function showOver(){
+  const st = S ? [S.day - 1, S.served, cardsDone()] : [0, 0, 0];
+  try { localStorage.removeItem(SAVE_KEY); localStorage.removeItem(OLD_KEY); } catch (e) {}
+  S = null; N = null; go('over');
+  const draw = () => { redraw = draw; layer.innerHTML = `<div class="full"><div class="logo" style="font-size:56px;color:var(--red);text-shadow:0 4px 0 #3A0E12">${t('overT')}</div>
+    <p class="tagline">${t('overMsg')}</p><p class="muted">${t('overStats', ...st)}</p><button class="btn primary big" data-act="title">${t('tryAgain')}</button></div>`; };
+  sfx.bad(); draw();
+}
+function showCredits(){
+  go('story'); redraw = showCredits;
+  layer.innerHTML = `<div class="full">${lanterns(15).replace('lans', 'lans" style="transform:scale(2.2);margin-bottom:30px')}<div class="logo" style="font-size:60px">${t('thanks')}</div>
+    <p class="logo-sub">味憶夜市 ・ ${t('sub')}</p><p class="tagline">${t('creditsLine', S.served, S.day - 1)}</p><p class="tagline">${t('keepPlaying')}</p>
+    <button class="btn primary big" data-act="aftersum">${t('backToStall')}</button><p class="credit">${t('credit')}</p></div>`;
+}
+
+/* ---------- main loop ---------- */
+let last = 0;
+function loop(ts){
+  const dt = Math.min(.05, last ? (ts - last) / 1000 : 0); last = ts; T += dt;
+  try {
+    if (view === 'night' && N && $('#modal').hidden) { simNight(dt); updateBars(); }
+    if (view === 'title') ambient(dt);
+    if (view === 'map') ART.map(G, T, {});
+    else ART.scene(G, sceneState(), T);
+    if (N && N.cv && N.c) ART.cook(N.cv.getContext('2d'), N.c.m, S.tools[N.c.m], T,
+      { phase: N.phase === 'result' ? 'done' : N.phase === 'prep' ? 'idle' : N.phase, pos: N.c.pos || 0, food: DISHES[N.c.i].emoji });
+  } catch (e) { console.error(e); }
+  requestAnimationFrame(loop);
+}
+
+/* ---------- events ---------- */
+sceneCv.addEventListener('click', e => {
+  if (view !== 'night' || !N || N.phase !== 'idle') return;
+  const r = sceneCv.getBoundingClientRect(), x = (e.clientX - r.left) / r.width * 480, y = (e.clientY - r.top) / r.height * 270;
+  const hit = N.people.filter(p => p.state === 'wait' && p.type !== 'ghostX' && Math.abs(p.x - x) < 10 && y > p.by - 30 && y < p.by + 6).sort((a, b) => Math.abs(a.x - x) - Math.abs(b.x - x))[0];
+  if (hit) beginOrder(hit);
+});
+document.addEventListener('click', e => {
+  const b = e.target.closest('[data-act]'); if (!b || b.disabled) return;
+  const a = b.dataset.act; ac();
+  switch (a) {
+    case 'newgame':
+      if (loadSave()) openModal(`<div class="shead"><h2>${t('restartQ')}</h2></div><p>${t('restartWarn')}</p><div class="row"><button class="btn" data-act="close">${t('cancel')}</button><button class="btn primary" data-act="newconfirm">${t('confirm')}</button></div>`);
+      else startNew(); break;
+    case 'newconfirm': closeModal(); startNew(); break;
+    case 'continue': S = loadSave(); if (S) showHub(); else showTitle(); break;
+    case 'title': showTitle(); break;
+    case 'next': storyNext && storyNext(); break;
+    case 'skip': storySkip && storySkip(); break;
+    case 'lang': case 'setlang':
+      LANG = a === 'lang' ? 1 - LANG : +b.dataset.l; try { localStorage.setItem('weiyi-lang', LANG); } catch (e) {}
+      document.documentElement.lang = LANG ? 'vi' : 'zh-Hant-TW'; if (!$('#modal').hidden) closeModal(); renderHud(); renderDock(); if (redraw) redraw(); fit(); break;
+    case 'mute': muted = !muted; renderHud(); break;
+    case 'fs': try { if (document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen().then(() => screen.orientation && screen.orientation.lock && screen.orientation.lock('landscape').catch(() => {})).catch(() => {}); } catch (err) {} break;
+    case 'anyway': rotDismissed = true; fit(); break;
+    case 'map': showMap(); break;
+    case 'tostall': showHub(); break;
+    case 'spot': { const k = b.dataset.k; sfx.tap(); cart = {};
+      if (k === 'stall') showHub(); else if (k === 'workshop') showWorkshop(); else if (k === 'hospital') showHospital(); else showShop(k); break; }
+    case 'cart': { const k = b.dataset.k; cart[k] = clamp((cart[k] || 0) + (+b.dataset.d), 0, 30); sfx.tap(); showShop(shopKey); break; }
+    case 'cartfill': { cart = {}; let any = 0; shopItems(shopKey).forEach(k => { const need = targetUnits(k) - have(k); if (need > 0) { cart[k] = Math.ceil(need / ING[k].n); any = 1; } });
+      if (!any) toast(t('needNothing')); sfx.tap(); showShop(shopKey); break; }
+    case 'buy': { const total = Object.entries(cart).reduce((n, [k, q]) => n + ING[k].p * q, 0); if (!total || total > S.money) break;
+      S.money -= total; Object.entries(cart).forEach(([k, q]) => addInv(k, q * ING[k].n)); cart = {}; save(); sfx.coin(); toast(t('bought')); showShop(shopKey); renderHud(); break; }
+    case 'wstab': wsTab = b.dataset.k; showWorkshop(); break;
+    case 'uptool': { const m = b.dataset.k, c = TOOL_COST[S.tools[m]]; if (S.tools[m] < 5 && S.money >= c) { S.money -= c; S.tools[m]++; save(); sfx.lantern(); toast(`${L(METHODS[m].name)} → ${L(TOOL_TIERS[S.tools[m] - 1].name)}`); showWorkshop(); renderHud(); } break; }
+    case 'upshop': { const s = SHOP_LV[S.shop]; if (s && S.money >= s.cost) { S.money -= s.cost; S.shop++; S.stamina = staminaMax(); save(); sfx.lantern(); toast(L(s.name)); showWorkshop(); renderHud(); } break; }
+    case 'upgear': { const k = b.dataset.k, g = GEAR[k], c = g.cost[S.gear[k]]; if (S.gear[k] < g.max && S.money >= c) { S.money -= c; S.gear[k]++; save(); sfx.lantern(); showWorkshop(); renderHud(); } break; }
+    case 'visit': S.visited = S.day; S.stamina = staminaMax(); save(); sfx.ok(); showHospital(); renderHud(); break;
+    case 'stats': showStats(); break;
+    case 'addstat': { const k = b.dataset.k; if (S.points > 0 && S.stats[k] < 10) { S.points--; S.stats[k]++; save(); sfx.tap(); showStats(); renderHud(); renderDock(); } break; }
+    case 'album': showAlbum(); break;
+    case 'card': openModal(`<div class="shead"><h2>${t('album')}</h2><button class="btn small ghost" data-act="album">${t('back')}</button></div>${recipeCard(+b.dataset.i)}`); break;
+    case 'saves': showSaves(); break;
+    case 'copy': { const box = $('#exportBox'), txt = box ? box.value : '';
+      const fb = () => { if (box) { box.focus(); box.select(); } $('#saveMsg').textContent = t('selected'); };
+      try { navigator.clipboard.writeText(txt).then(() => { $('#saveMsg').textContent = t('copied'); }, fb); } catch (err) { fb(); } break; }
+    case 'import': doImport(); break;
+    case 'close': closeModal(); break;
+    case 'open': openStall(); break;
+    case 'servenext': { const w = N && N.people.filter(p => p.state === 'wait' && p.type !== 'ghostX').sort((x, y) => x.pat - y.pat)[0]; if (w) beginOrder(w); break; }
+    case 'closeearly': if (N && N.phase === 'idle') { N.queue = []; N.stopSpawn = true; N.reason = t('closedEarly'); N.people.forEach(p => { if (p.state === 'wait' || p.state === 'in') goOut(p, null); }); renderDock(); } break;
+    case 'guess': onGuess(+b.dataset.i); break;
+    case 'cookit': confirmCook(); break;
+    case 'ing': onIng(b.dataset.s, b); break;
+    case 'stop': if (N && N.phase === 'heat') onStop(); break;
+    case 'redo': onRedo(); break;
+    case 'serve': onServe(); break;
+    case 'ev': evChoice(b.dataset.k); break;
+    case 'evdone': evDone(); break;
+    case 'aftersum': afterSummary(); break;
+    case 'paybill': payBill(); break;
+    case 'gameover': showOver(); break;
+    case 'ending': showStory(ENDING, () => { S.ended = true; save(); showCredits(); }); break;
+  }
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && !$('#modal').hidden && !modalOnClose) closeModal();
+  if ((e.key === ' ' || e.key === 'Enter') && N && N.phase === 'heat' && $('#modal').hidden && document.activeElement?.dataset?.act !== 'stop') { e.preventDefault(); onStop(); }
+});
+$('#modal').addEventListener('click', e => { if (e.target.id === 'modal' && !modalOnClose) closeModal(); });
+function startNew(){
+  S = newState(); starterStock(S); save();
+  showStory(INTRO, () => { showHub(); toast(t('firstTip'), 3500); });
+}
+
+/* ---------- boot (keeps progress across live updates) ---------- */
+function boot(data){
+  document.documentElement.lang = LANG ? 'vi' : 'zh-Hant-TW'; fit();
+  const st = data && data.state;
+  if (st && valid(st)) { S = st; showHub(); } else showTitle();
+  requestAnimationFrame(loop);
+}
+try { window.claude?.hot?.snapshot?.(() => ({ state: S })); } catch (e) {}
+window.claude?.hot?.ready ? window.claude.hot.ready(boot) : boot(window.claude?.hot?.data ?? {});

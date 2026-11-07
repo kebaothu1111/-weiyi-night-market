@@ -23,11 +23,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/configure-pages@v5
-      # 這個遊戲是單一 HTML 檔，不需要 npm 建置，直接把 index.html 放進網站資料夾
+      # 純 HTML/CSS/JS，不需要 npm 建置，直接把檔案放進網站資料夾
       - name: Collect site files
         run: |
           mkdir _site
-          cp index.html _site/
+          cp -r index.html css js .nojekyll _site/
       - uses: actions/upload-pages-artifact@v3
         with:
           path: _site
